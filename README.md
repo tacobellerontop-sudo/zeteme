@@ -66,7 +66,9 @@ time. Video fullscreen fills the screen; `Esc` leaves it.
 
 zeteme has no toolbar; everything is done from the keyboard, with bindings
 modeled on qutebrowser. Clicking or tabbing into a text field puts you in
-insert mode, where keys go to the page until you press `Esc`.
+insert mode, where keys go to the page until you press `Esc`. A field the page
+focuses by itself (a search box on load, say) doesn't: click it or press `i`.
+Keys work the same when an embedded player or other frame has focus.
 
 | Key | Action |
 | --- | --- |
@@ -85,6 +87,7 @@ insert mode, where keys go to the page until you press `Esc`.
 | `/` then `n` / `N` | Find text, next / previous match |
 | `yy` | Copy the current URL |
 | `gi` | Focus the first text field |
+| `i` | Type into the field the page focused |
 | `:` | Command bar |
 | `Esc` | Leave insert mode, close the command bar or cancel hints |
 
