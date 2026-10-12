@@ -14,7 +14,26 @@ pub enum Command {
     ZoomOut,
     ZoomReset,
     Fullscreen(bool),
+    Settings,
+    SettingsReady,
+    SetCheckUpdates(bool),
+    CheckUpdate,
+    InstallUpdate,
     Quit,
+}
+
+impl Command {
+    /// Commands only the settings page may send, so that web pages can't
+    /// change settings or start an install.
+    pub fn settings_only(&self) -> bool {
+        matches!(
+            self,
+            Command::SettingsReady
+                | Command::SetCheckUpdates(_)
+                | Command::CheckUpdate
+                | Command::InstallUpdate
+        )
+    }
 }
 
 /// Parses a message sent by `keys.js` through `window.ipc.postMessage`.
@@ -32,6 +51,15 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
         "zoom-out" => Command::ZoomOut,
         "zoom-reset" => Command::ZoomReset,
         "fullscreen" => Command::Fullscreen(arg == "on"),
+        "settings" => Command::Settings,
+        "settings-ready" => Command::SettingsReady,
+        "set" => match arg {
+            "check_updates on" => Command::SetCheckUpdates(true),
+            "check_updates off" => Command::SetCheckUpdates(false),
+            _ => return None,
+        },
+        "update-check" => Command::CheckUpdate,
+        "update-install" => Command::InstallUpdate,
         "quit" => Command::Quit,
         _ => return None,
     };
@@ -136,6 +164,14 @@ mod tests {
             parse_ipc("fullscreen off"),
             Some(Command::Fullscreen(false))
         );
+        assert_eq!(parse_ipc("settings"), Some(Command::Settings));
+        assert_eq!(
+            parse_ipc("set check_updates off"),
+            Some(Command::SetCheckUpdates(false))
+        );
+        assert_eq!(parse_ipc("set bogus on"), None);
+        assert!(parse_ipc("update-install").unwrap().settings_only());
+        assert!(!parse_ipc("settings").unwrap().settings_only());
         assert_eq!(parse_ipc("open "), None);
         assert_eq!(parse_ipc("bogus"), None);
     }

@@ -13,16 +13,56 @@ on:
 permissions:
   contents: write
 
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  # Signing runs only once the Azure Artifact Signing secrets are set; see
+  # "Code signing" in the README.
+  SIGN: ${{ secrets.AZURE_CLIENT_ID != '' }}
+
 jobs:
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # zeteme compares this tag with its own version to find updates, so
+      # they have to agree.
+      - name: Check tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($env:TAG -ne "v$version") {
+            Write-Error "Tag $env:TAG does not match Cargo.toml version $version"
+          }
       - run: cargo build --release
+      - name: Sign zeteme.exe
+        if: env.SIGN == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\target\release\zeteme.exe
+      - run: installer\build.ps1
+      - name: Sign installer
+        if: env.SIGN == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\target\installer\zeteme-setup.exe
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
-          files: target/release/zeteme.exe
+          files: |
+            target/installer/zeteme-setup.exe
+            target/release/zeteme.exe
           generate_release_notes: true

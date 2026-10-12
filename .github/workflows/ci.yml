@@ -17,7 +17,10 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build --release
+      - run: installer\build.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: zeteme-windows
-          path: target/release/zeteme.exe
+          path: |
+            target/release/zeteme.exe
+            target/installer/zeteme-setup.exe

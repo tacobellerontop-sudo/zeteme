@@ -11,10 +11,47 @@ WebView2 through the [`wry`](https://crates.io/crates/wry) crate.
 
 ## Install
 
-Download `zeteme.exe` from the latest
-[release](https://github.com/tacobellerontop-sudo/zeteme/releases) and run it;
-there is nothing to install. Releases are built when a `v*` tag is pushed, or
-by running the Release workflow from the Actions tab with a tag name.
+Download `zeteme-setup.exe` from the latest
+[release](https://github.com/tacobellerontop-sudo/zeteme/releases) and run it.
+It installs zeteme for your user only, so it needs no admin rights, and adds
+it to the Start menu. The plain `zeteme.exe` is attached too if you'd rather
+run it without installing.
+
+## Updates
+
+`:settings` opens the settings page. Its Updates section shows the running
+version, checks GitHub for a newer release and installs it: zeteme closes,
+the installer runs without its wizard, and zeteme reopens with your tabs.
+By default zeteme checks once when it starts and, if there is an update,
+says so in the window title. Updating needs `curl.exe`, which comes with
+Windows 10 and 11.
+
+## Releasing
+
+Bump `version` in `Cargo.toml`, then push a matching `v*` tag or run the
+Release workflow from the Actions tab with that tag. The workflow refuses a
+tag that doesn't match `Cargo.toml`, because zeteme compares the two to find
+updates.
+
+### Code signing
+
+Windows Smart App Control blocks unsigned programs, so releases should be
+signed. The Release workflow signs `zeteme.exe` and the installer with
+[Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/)
+(formerly Trusted Signing) once these repository secrets are set; without
+them it builds unsigned releases as before.
+
+| Secret | Value |
+| --- | --- |
+| `AZURE_TENANT_ID` | Directory (tenant) ID of the app registration |
+| `AZURE_CLIENT_ID` | Application (client) ID of the app registration |
+| `AZURE_CLIENT_SECRET` | A client secret of the app registration |
+| `AZURE_SIGNING_ENDPOINT` | The signing account's endpoint, e.g. `https://eus.codesigning.azure.net/` |
+| `AZURE_SIGNING_ACCOUNT` | The signing account name |
+| `AZURE_CERTIFICATE_PROFILE` | The certificate profile name |
+
+The app registration needs the *Artifact Signing Certificate Profile Signer*
+role on the signing account.
 
 ## Building
 
@@ -52,11 +89,11 @@ insert mode, where keys go to the page until you press `Esc`.
 | `Esc` | Leave insert mode, close the command bar or cancel hints |
 
 Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`), `:close`,
-`:back`, `:forward`, `:reload` (`:r`), `:quit` (`:q`).
+`:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
 ## Data
 
-Cookies, logins and the open tabs are kept in `%LOCALAPPDATA%\zeteme`, so
+Cookies, logins, settings and the open tabs are kept in `%LOCALAPPDATA%\zeteme`, so
 zeteme reopens where you left off. Downloads go to your Downloads folder.

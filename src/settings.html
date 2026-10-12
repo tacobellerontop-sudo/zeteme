@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 32px 40px; background: #1e1e1e; color: #ddd;
+         font: 14px/1.5 "Segoe UI", sans-serif; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 24px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: #fff; }
+  section { max-width: 560px; padding: 16px 20px; border: 1px solid #444; border-radius: 4px; }
+  p { margin: 0 0 12px; }
+  label { display: block; margin: 0 0 16px; }
+  button { font: inherit; color: #fff; background: #333; border: 1px solid #555;
+           border-radius: 3px; padding: 3px 12px; cursor: pointer; }
+  button:hover { background: #3c3c3c; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #install { display: none; margin-left: 8px; border-color: #a80; }
+  #status { margin-left: 12px; color: #aaa; }
+  code { font-family: Consolas, monospace; }
+</style>
+</head>
+<body>
+<h1>zeteme settings</h1>
+<section>
+  <h2>Updates</h2>
+  <p>You are running zeteme <code>{{version}}</code>.</p>
+  <label><input type="checkbox" id="auto" {{check_updates}}>
+    Check for updates when zeteme starts</label>
+  <div>
+    <button id="check">Check now</button><button id="install"></button><span id="status"></span>
+  </div>
+</section>
+<script>
+  const send = (msg) => window.ipc.postMessage(msg);
+  const $ = (id) => document.getElementById(id);
+
+  $("auto").addEventListener("change", (e) => send(`set check_updates ${e.target.checked ? "on" : "off"}`));
+  $("check").addEventListener("click", () => send("update-check"));
+  $("install").addEventListener("click", () => send("update-install"));
+
+  // Called by zeteme whenever the update status changes.
+  window.zetemeUpdate = (state, detail) => {
+    const text = {
+      idle: "",
+      checking: "Checking...",
+      uptodate: "zeteme is up to date.",
+      available: `zeteme ${detail} is available.`,
+      downloading: `Downloading ${detail}; zeteme restarts when it is installed.`,
+      failed: `Update failed: ${detail}`,
+    }[state];
+    $("status").textContent = text;
+    $("check").disabled = state === "checking" || state === "downloading";
+    $("install").style.display = state === "available" ? "inline-block" : "none";
+    $("install").textContent = `Install ${detail}`;
+  };
+
+  send("settings-ready");
+</script>
+</body>
+</html>

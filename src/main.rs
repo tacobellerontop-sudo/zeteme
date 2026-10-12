@@ -2,17 +2,24 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod command;
+mod settings;
+mod update;
 
-use std::{fs, path::PathBuf};
+use std::{borrow::Cow, fs, path::PathBuf, thread};
 
 use command::{Command, normalize_url, parse_ipc};
+use settings::{SETTINGS_URL, Settings};
 use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     window::{Fullscreen, Window, WindowBuilder},
 };
-use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder, http::Request};
+use update::Status;
+use wry::{
+    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
+    http::{Request, Response},
+};
 
 const DEFAULT_URL: &str = "https://duckduckgo.com";
 const ZOOM_STEP: f64 = 0.1;
@@ -24,6 +31,8 @@ enum UserEvent {
     Command(Command),
     Title(u64, String),
     NewTab(String),
+    Update(Status),
+    UpdateDownloaded(PathBuf),
 }
 
 struct Tab {
@@ -42,6 +51,9 @@ struct Browser {
     closed: Vec<String>,
     next_id: u64,
     session_file: PathBuf,
+    settings: Settings,
+    settings_file: PathBuf,
+    update: Status,
 }
 
 /// Where cookies, logins and the saved session live: `%LOCALAPPDATA%\zeteme`.
@@ -68,14 +80,26 @@ impl Browser {
         let command_proxy = self.proxy.clone();
         let title_proxy = self.proxy.clone();
         let popup_proxy = self.proxy.clone();
+        let settings_file = self.settings_file.clone();
         let bounds = self.bounds();
         let webview = WebViewBuilder::new_with_web_context(&mut self.context)
             .with_url(url)
             .with_bounds(bounds)
             .with_initialization_script(KEYS_JS)
+            .with_custom_protocol("zeteme".into(), move |_, _| {
+                let page = settings::page(&Settings::load(&settings_file));
+                Response::builder()
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .body(Cow::Owned(page.into_bytes()))
+                    .unwrap()
+            })
             .with_ipc_handler(move |req: Request<String>| {
-                if let Some(command) = parse_ipc(req.body()) {
-                    let _ = command_proxy.send_event(UserEvent::Command(command));
+                let from_settings = req.uri().to_string().starts_with(SETTINGS_URL);
+                match parse_ipc(req.body()) {
+                    Some(command) if from_settings || !command.settings_only() => {
+                        let _ = command_proxy.send_event(UserEvent::Command(command));
+                    }
+                    _ => {}
                 }
             })
             .with_document_title_changed_handler(move |title| {
@@ -114,11 +138,14 @@ impl Browser {
 
     fn update_title(&self) {
         let tab = &self.tabs[self.current];
-        let title = if tab.title.is_empty() {
+        let mut title = if tab.title.is_empty() {
             "zeteme".to_string()
         } else {
             format!("{} - zeteme", tab.title)
         };
+        if let Status::Available(tag) = &self.update {
+            title.push_str(&format!(" (update {tag} available, :settings)"));
+        }
         if self.tabs.len() > 1 {
             self.window.set_title(&format!(
                 "[{}/{}] {title}",
@@ -160,6 +187,69 @@ impl Browser {
         let _ = fs::write(&self.session_file, urls.join("\n"));
     }
 
+    fn open_settings(&mut self) {
+        let open = self.tabs.iter().position(|tab| {
+            tab.webview
+                .url()
+                .is_ok_and(|url| url.starts_with(SETTINGS_URL))
+        });
+        match open {
+            Some(index) => self.select(index),
+            None => {
+                let _ = self.open_tab(SETTINGS_URL);
+            }
+        }
+    }
+
+    /// Records the update status and shows it on any open settings page.
+    fn set_update(&mut self, status: Status) {
+        self.update = status;
+        let script = settings::status_script(&self.update);
+        for tab in &self.tabs {
+            if tab
+                .webview
+                .url()
+                .is_ok_and(|url| url.starts_with(SETTINGS_URL))
+            {
+                let _ = tab.webview.evaluate_script(&script);
+            }
+        }
+        self.update_title();
+    }
+
+    fn check_for_update(&mut self) {
+        if matches!(self.update, Status::Checking | Status::Downloading(_)) {
+            return;
+        }
+        self.set_update(Status::Checking);
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let status = match update::latest_tag() {
+                Ok(tag) if update::is_newer(&tag, update::CURRENT_VERSION) => {
+                    Status::Available(tag)
+                }
+                Ok(_) => Status::UpToDate,
+                Err(err) => Status::Failed(err),
+            };
+            let _ = proxy.send_event(UserEvent::Update(status));
+        });
+    }
+
+    fn install_update(&mut self) {
+        let Status::Available(tag) = self.update.clone() else {
+            return;
+        };
+        self.set_update(Status::Downloading(tag.clone()));
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let event = match update::download(&tag) {
+                Ok(path) => UserEvent::UpdateDownloaded(path),
+                Err(err) => UserEvent::Update(Status::Failed(err)),
+            };
+            let _ = proxy.send_event(event);
+        });
+    }
+
     /// Returns false when the browser should exit.
     fn run(&mut self, command: Command) -> bool {
         match command {
@@ -183,6 +273,14 @@ impl Browser {
             Command::Fullscreen(on) => self
                 .window
                 .set_fullscreen(on.then_some(Fullscreen::Borderless(None))),
+            Command::Settings => self.open_settings(),
+            Command::SettingsReady => self.set_update(self.update.clone()),
+            Command::SetCheckUpdates(on) => {
+                self.settings.check_updates = on;
+                self.settings.save(&self.settings_file);
+            }
+            Command::CheckUpdate => self.check_for_update(),
+            Command::InstallUpdate => self.install_update(),
             Command::Quit => return false,
         }
         true
@@ -193,6 +291,8 @@ fn main() -> wry::Result<()> {
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
     let session_file = data_dir.join("session.txt");
+    let settings_file = data_dir.join("settings.txt");
+    let settings = Settings::load(&settings_file);
 
     // Restore the last session, then open any URL given on the command line.
     let mut urls: Vec<String> = fs::read_to_string(&session_file)
@@ -223,9 +323,15 @@ fn main() -> wry::Result<()> {
         closed: Vec::new(),
         next_id: 0,
         session_file,
+        settings,
+        settings_file,
+        update: Status::Idle,
     };
     for url in &urls {
         browser.open_tab(url)?;
+    }
+    if browser.settings.check_updates {
+        browser.check_for_update();
     }
 
     event_loop.run(move |event, _, control_flow| {
@@ -255,6 +361,21 @@ fn main() -> wry::Result<()> {
             }
             Event::UserEvent(UserEvent::Command(command)) => browser.run(command),
             Event::UserEvent(UserEvent::NewTab(url)) => browser.run(Command::TabOpen(url)),
+            Event::UserEvent(UserEvent::Update(status)) => {
+                browser.set_update(status);
+                true
+            }
+            Event::UserEvent(UserEvent::UpdateDownloaded(installer)) => {
+                // The installer replaces zeteme once it has exited, then
+                // starts it again; the session is saved on the way out.
+                match update::install(&installer) {
+                    Ok(()) => false,
+                    Err(err) => {
+                        browser.set_update(Status::Failed(err));
+                        true
+                    }
+                }
+            }
             Event::UserEvent(UserEvent::Title(id, title)) => {
                 if let Some(tab) = browser.tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.title = title;
