@@ -189,6 +189,11 @@
     el.click();
   }
 
+  // Fullscreen video only fills the webview; ask for the window to follow.
+  document.addEventListener("fullscreenchange", () => {
+    send(`fullscreen ${document.fullscreenElement ? "on" : "off"}`);
+  });
+
   const scroll = (x, y) => window.scrollBy({ left: x, top: y, behavior: "instant" });
   const half = () => window.innerHeight / 2;
 
@@ -251,7 +256,11 @@
       return;
     }
 
-    if (e.key === "Escape") { pending = ""; return; }
+    if (e.key === "Escape") {
+      pending = "";
+      if (document.fullscreenElement) document.exitFullscreen();
+      return;
+    }
     if (e.key.length !== 1) return;
 
     const seq = pending + e.key;

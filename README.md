@@ -7,15 +7,23 @@ WebView2 through the [`wry`](https://crates.io/crates/wry) crate.
 ## Requirements
 
 - Windows 10 or 11 with the WebView2 runtime (included with current Windows versions)
-- Rust stable
+- Rust stable, only to build from source
 
-## Running
+## Install
+
+Download `zeteme.exe` from the latest
+[release](https://github.com/tacobellerontop-sudo/zeteme/releases) and run it;
+there is nothing to install. Releases are built automatically when a `v*` tag
+is pushed.
+
+## Building
 
 ```sh
 cargo run -- example.com
 ```
 
-With no argument, zeteme opens DuckDuckGo.
+With no argument, zeteme reopens your last session, or DuckDuckGo the first
+time. Video fullscreen fills the screen; `Esc` leaves it.
 
 ## Keys
 

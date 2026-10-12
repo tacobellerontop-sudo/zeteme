@@ -10,7 +10,7 @@ use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
-    window::{Window, WindowBuilder},
+    window::{Fullscreen, Window, WindowBuilder},
 };
 use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder, http::Request};
 
@@ -132,12 +132,13 @@ impl Browser {
 
     /// Returns false when the last tab was closed and the browser should exit.
     fn close_current(&mut self) -> bool {
+        if self.tabs.len() == 1 {
+            // Closing the last tab quits, like :q, and keeps it for next time.
+            return false;
+        }
         let tab = self.tabs.remove(self.current);
         if let Ok(url) = tab.webview.url() {
             self.closed.push(url);
-        }
-        if self.tabs.is_empty() {
-            return false;
         }
         self.select(self.current.min(self.tabs.len() - 1));
         true
@@ -179,6 +180,9 @@ impl Browser {
             Command::ZoomIn => self.set_zoom(self.tabs[self.current].zoom + ZOOM_STEP),
             Command::ZoomOut => self.set_zoom(self.tabs[self.current].zoom - ZOOM_STEP),
             Command::ZoomReset => self.set_zoom(1.0),
+            Command::Fullscreen(on) => self
+                .window
+                .set_fullscreen(on.then_some(Fullscreen::Borderless(None))),
             Command::Quit => return false,
         }
         true

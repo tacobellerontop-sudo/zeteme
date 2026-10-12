@@ -2,6 +2,11 @@
 name = "zeteme"
 version = "0.1.0"
 edition = "2024"
+description = "A minimal, keyboard-driven web browser for Windows, in the spirit of qutebrowser"
+repository = "https://github.com/tacobellerontop-sudo/zeteme"
+readme = "README.md"
+keywords = ["browser", "webview", "vim", "qutebrowser"]
+categories = ["gui"]
 
 [dependencies]
 tao = "0.37"

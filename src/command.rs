@@ -13,6 +13,7 @@ pub enum Command {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    Fullscreen(bool),
     Quit,
 }
 
@@ -30,6 +31,7 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
         "zoom-in" => Command::ZoomIn,
         "zoom-out" => Command::ZoomOut,
         "zoom-reset" => Command::ZoomReset,
+        "fullscreen" => Command::Fullscreen(arg == "on"),
         "quit" => Command::Quit,
         _ => return None,
     };
@@ -129,6 +131,11 @@ mod tests {
         );
         assert_eq!(parse_ipc("close"), Some(Command::Close));
         assert_eq!(parse_ipc("quit"), Some(Command::Quit));
+        assert_eq!(parse_ipc("fullscreen on"), Some(Command::Fullscreen(true)));
+        assert_eq!(
+            parse_ipc("fullscreen off"),
+            Some(Command::Fullscreen(false))
+        );
         assert_eq!(parse_ipc("open "), None);
         assert_eq!(parse_ipc("bogus"), None);
     }
