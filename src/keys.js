@@ -28,22 +28,30 @@
   let insertEl = null;
   const intended = () => Date.now() - lastIntent < 500;
 
+  // Built without innerHTML, which pages using Trusted Types (YouTube) block,
+  // and styled with a constructed sheet, which a style-src CSP doesn't block.
+  function styleRoot(root, css) {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(css);
+    root.adoptedStyleSheets = [sheet];
+  }
+
   function ensureBar() {
     if (bar) return;
     const host = document.createElement("zeteme-bar");
     const root = host.attachShadow({ mode: "closed" });
-    root.innerHTML = `
-      <style>
-        :host { all: initial; }
-        div { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647;
-              display: none; font: 13px/20px Consolas, monospace; color: #ddd;
-              background: #1e1e1e; border-top: 1px solid #444; padding: 1px 6px; }
-        input { all: unset; width: calc(100% - 2ch); color: #fff; }
-        span { white-space: pre; }
-      </style>
-      <div><span></span><input spellcheck="false"></div>`;
-    bar = root.querySelector("div");
-    input = root.querySelector("input");
+    styleRoot(root, `
+      :host { all: initial; }
+      div { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647;
+            display: none; font: 13px/20px Consolas, monospace; color: #ddd;
+            background: #1e1e1e; border-top: 1px solid #444; padding: 1px 6px; }
+      input { all: unset; width: calc(100% - 2ch); color: #fff; }
+      span { white-space: pre; }`);
+    bar = document.createElement("div");
+    input = document.createElement("input");
+    input.spellcheck = false;
+    bar.append(document.createElement("span"), input);
+    root.appendChild(bar);
     input.addEventListener("blur", () => {
       if (!barMode) return;
       // Only a click elsewhere closes the bar; pages that move focus around on
@@ -166,12 +174,11 @@
 
     const host = document.createElement("zeteme-hints");
     const root = host.attachShadow({ mode: "closed" });
-    root.innerHTML = `<style>
+    styleRoot(root, `
       :host { all: initial; }
       span { position: fixed; z-index: 2147483647; font: bold 11px/13px Consolas, monospace;
              color: #111; background: #fc3; border: 1px solid #a80; border-radius: 2px;
-             padding: 0 2px; text-transform: uppercase; pointer-events: none; }
-    </style>`;
+             padding: 0 2px; text-transform: uppercase; pointer-events: none; }`);
     const labels = hintLabels(targets.length);
     const items = targets.map((el, i) => {
       const r = el.getBoundingClientRect();
