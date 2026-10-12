@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Can also be started from the Actions tab; the tag is created if needed.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v0.1.0
+        required: true
 
 permissions:
   contents: write
@@ -16,5 +22,7 @@ jobs:
       - run: cargo build --release
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: target/release/zeteme.exe
           generate_release_notes: true

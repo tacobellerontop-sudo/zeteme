@@ -13,8 +13,8 @@ WebView2 through the [`wry`](https://crates.io/crates/wry) crate.
 
 Download `zeteme.exe` from the latest
 [release](https://github.com/tacobellerontop-sudo/zeteme/releases) and run it;
-there is nothing to install. Releases are built automatically when a `v*` tag
-is pushed.
+there is nothing to install. Releases are built when a `v*` tag is pushed, or
+by running the Release workflow from the Actions tab with a tag name.
 
 ## Building
 
