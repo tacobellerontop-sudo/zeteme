@@ -90,6 +90,7 @@
       case "t": case "tabopen": if (arg) send(`tabopen ${arg}`); break;
       case "close": send("close"); break;
       case "q": case "quit": send("quit"); break;
+      case "set": case "settings": send("settings"); break;
       case "back": history.back(); break;
       case "forward": history.forward(); break;
       case "r": case "reload": location.reload(); break;
