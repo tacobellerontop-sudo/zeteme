@@ -3,19 +3,22 @@
 
 mod command;
 mod settings;
+mod tabbar;
 mod update;
 
-use std::{borrow::Cow, fs, path::PathBuf, thread};
+use std::{borrow::Cow, fs, path::PathBuf, thread, time::Duration};
 
 use command::{Command, normalize_url, parse_ipc};
-use settings::{SETTINGS_URL, Settings};
+use settings::{SETTINGS_URL, Settings, js_string};
+use tabbar::Show;
 use tao::{
-    dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     window::{Fullscreen, Window, WindowBuilder},
 };
 use update::Status;
+#[cfg(windows)]
+use wry::WebViewExtWindows;
 use wry::{
     NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
     http::{Request, Response},
@@ -33,6 +36,9 @@ enum UserEvent {
     NewTab(String),
     Update(Status),
     UpdateDownloaded(PathBuf),
+    SelectTab(usize),
+    TabBarReady,
+    HideTabBar(u64),
 }
 
 struct Tab {
@@ -54,6 +60,11 @@ struct Browser {
     settings: Settings,
     settings_file: PathBuf,
     update: Status,
+    tab_bar: WebView,
+    /// Whether the bar is up in `Show::Auto`, and which timer may hide it.
+    tab_bar_up: bool,
+    tab_bar_timer: u64,
+    fullscreen: bool,
 }
 
 /// Where cookies, logins and the saved session live: `%LOCALAPPDATA%\zeteme`.
@@ -64,13 +75,102 @@ fn data_dir() -> PathBuf {
         .join("zeteme")
 }
 
+/// Lays out the tab bar and pages in `window`, returning (bar, pages).
+fn layout(window: &Window, settings: &Settings, fullscreen: bool) -> (Rect, Rect) {
+    let size = window.inner_size();
+    let reserve = settings.tabs_show == Show::Always && !fullscreen;
+    tabbar::layout(
+        settings.tabs_position,
+        reserve,
+        size.width,
+        size.height,
+        window.scale_factor(),
+    )
+}
+
+fn build_tab_bar(
+    window: &Window,
+    context: &mut WebContext,
+    proxy: EventLoopProxy<UserEvent>,
+    bounds: Rect,
+) -> wry::Result<WebView> {
+    WebViewBuilder::new_with_web_context(context)
+        .with_html(tabbar::HTML)
+        .with_bounds(bounds)
+        .with_visible(false)
+        .with_ipc_handler(move |req: Request<String>| {
+            let msg = req.body();
+            let event = if msg == "ready" {
+                UserEvent::TabBarReady
+            } else if let Some(index) = msg.strip_prefix("select ").and_then(|i| i.parse().ok()) {
+                UserEvent::SelectTab(index)
+            } else {
+                return;
+            };
+            let _ = proxy.send_event(event);
+        })
+        .build_as_child(window)
+}
+
 impl Browser {
     fn bounds(&self) -> Rect {
-        let size = self.window.inner_size();
-        Rect {
-            position: PhysicalPosition::new(0, 0).into(),
-            size: PhysicalSize::new(size.width, size.height).into(),
+        layout(&self.window, &self.settings, self.fullscreen).1
+    }
+
+    /// Places the bar and pages for the current settings and window size.
+    fn layout(&self) {
+        let (bar, pages) = layout(&self.window, &self.settings, self.fullscreen);
+        for tab in &self.tabs {
+            let _ = tab.webview.set_bounds(pages);
         }
+        let _ = self.tab_bar.set_bounds(bar);
+        let visible = !self.fullscreen
+            && match self.settings.tabs_show {
+                Show::Always => true,
+                Show::Auto => self.tab_bar_up,
+                Show::Never => false,
+            };
+        let _ = self.tab_bar.set_visible(visible);
+        // Pages opened later are stacked above the bar.
+        #[cfg(windows)]
+        tabbar::raise(self.tab_bar.hwnd().0);
+    }
+
+    /// Shows every tab's title on the bar.
+    fn draw_tab_bar(&self) {
+        let titles: Vec<String> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                if tab.title.is_empty() {
+                    js_string(&tab.webview.url().unwrap_or_default())
+                } else {
+                    js_string(&tab.title)
+                }
+            })
+            .collect();
+        let _ = self.tab_bar.evaluate_script(&format!(
+            "window.zetemeTabs && zetemeTabs([{}], {}, {})",
+            titles.join(","),
+            self.current,
+            self.settings.tabs_position.vertical()
+        ));
+    }
+
+    /// In `Show::Auto`, shows the bar for a moment.
+    fn flash_tab_bar(&mut self) {
+        if self.settings.tabs_show != Show::Auto {
+            return;
+        }
+        self.tab_bar_up = true;
+        self.tab_bar_timer += 1;
+        let timer = self.tab_bar_timer;
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(tabbar::AUTO_HIDE_MS));
+            let _ = proxy.send_event(UserEvent::HideTabBar(timer));
+        });
+        self.layout();
     }
 
     fn open_tab(&mut self, url: &str) -> wry::Result<()> {
@@ -134,6 +234,8 @@ impl Browser {
         }
         let _ = self.tabs[index].webview.focus();
         self.update_title();
+        self.draw_tab_bar();
+        self.flash_tab_bar();
     }
 
     fn update_title(&self) {
@@ -270,14 +372,28 @@ impl Browser {
             Command::ZoomIn => self.set_zoom(self.tabs[self.current].zoom + ZOOM_STEP),
             Command::ZoomOut => self.set_zoom(self.tabs[self.current].zoom - ZOOM_STEP),
             Command::ZoomReset => self.set_zoom(1.0),
-            Command::Fullscreen(on) => self
-                .window
-                .set_fullscreen(on.then_some(Fullscreen::Borderless(None))),
+            Command::Fullscreen(on) => {
+                self.fullscreen = on;
+                self.window
+                    .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
+                self.layout();
+            }
             Command::Settings => self.open_settings(),
             Command::SettingsReady => self.set_update(self.update.clone()),
             Command::SetCheckUpdates(on) => {
                 self.settings.check_updates = on;
                 self.settings.save(&self.settings_file);
+            }
+            Command::SetTabsShow(show) => {
+                self.settings.tabs_show = show;
+                self.settings.save(&self.settings_file);
+                self.layout();
+            }
+            Command::SetTabsPosition(position) => {
+                self.settings.tabs_position = position;
+                self.settings.save(&self.settings_file);
+                self.draw_tab_bar();
+                self.layout();
             }
             Command::CheckUpdate => self.check_for_update(),
             Command::InstallUpdate => self.install_update(),
@@ -314,10 +430,19 @@ fn main() -> wry::Result<()> {
         .build(&event_loop)
         .expect("failed to create window");
 
+    let mut context = WebContext::new(Some(data_dir.join("webview")));
+    let proxy = event_loop.create_proxy();
+    let tab_bar = build_tab_bar(
+        &window,
+        &mut context,
+        proxy.clone(),
+        layout(&window, &settings, false).0,
+    )?;
+
     let mut browser = Browser {
         window,
-        context: WebContext::new(Some(data_dir.join("webview"))),
-        proxy: event_loop.create_proxy(),
+        context,
+        proxy,
         tabs: Vec::new(),
         current: 0,
         closed: Vec::new(),
@@ -326,6 +451,10 @@ fn main() -> wry::Result<()> {
         settings,
         settings_file,
         update: Status::Idle,
+        tab_bar,
+        tab_bar_up: false,
+        tab_bar_timer: 0,
+        fullscreen: false,
     };
     for url in &urls {
         browser.open_tab(url)?;
@@ -346,10 +475,7 @@ fn main() -> wry::Result<()> {
                 event: WindowEvent::Resized(_),
                 ..
             } => {
-                let bounds = browser.bounds();
-                for tab in &browser.tabs {
-                    let _ = tab.webview.set_bounds(bounds);
-                }
+                browser.layout();
                 true
             }
             Event::WindowEvent {
@@ -361,6 +487,23 @@ fn main() -> wry::Result<()> {
             }
             Event::UserEvent(UserEvent::Command(command)) => browser.run(command),
             Event::UserEvent(UserEvent::NewTab(url)) => browser.run(Command::TabOpen(url)),
+            Event::UserEvent(UserEvent::SelectTab(index)) => {
+                if index < browser.tabs.len() {
+                    browser.select(index);
+                }
+                true
+            }
+            Event::UserEvent(UserEvent::TabBarReady) => {
+                browser.draw_tab_bar();
+                true
+            }
+            Event::UserEvent(UserEvent::HideTabBar(timer)) => {
+                if timer == browser.tab_bar_timer {
+                    browser.tab_bar_up = false;
+                    browser.layout();
+                }
+                true
+            }
             Event::UserEvent(UserEvent::Update(status)) => {
                 browser.set_update(status);
                 true
@@ -381,6 +524,7 @@ fn main() -> wry::Result<()> {
                     tab.title = title;
                 }
                 browser.update_title();
+                browser.draw_tab_bar();
                 // Titles change on every navigation, so this keeps the
                 // session file current even if zeteme is killed.
                 browser.save_session();

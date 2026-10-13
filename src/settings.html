@@ -9,6 +9,9 @@
          font: 14px/1.5 "Segoe UI", sans-serif; }
   h1 { font-size: 20px; font-weight: 600; margin: 0 0 24px; }
   h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: #fff; }
+  section + section { margin-top: 16px; }
+  select { font: inherit; color: #fff; background: #333; border: 1px solid #555;
+           border-radius: 3px; padding: 2px 6px; margin-left: 8px; }
   section { max-width: 560px; padding: 16px 20px; border: 1px solid #444; border-radius: 4px; }
   p { margin: 0 0 12px; }
   label { display: block; margin: 0 0 16px; }
@@ -32,11 +35,31 @@
     <button id="check">Check now</button><button id="install"></button><span id="status"></span>
   </div>
 </section>
+<section>
+  <h2>Tabs</h2>
+  <label>Show the tab bar
+    <select id="tabs_show">
+      <option value="auto">when switching tabs</option>
+      <option value="always">always</option>
+      <option value="never">never</option>
+    </select></label>
+  <label>Position
+    <select id="tabs_position">
+      <option value="top">top</option>
+      <option value="bottom">bottom</option>
+      <option value="left">left</option>
+      <option value="right">right</option>
+    </select></label>
+</section>
 <script>
   const send = (msg) => window.ipc.postMessage(msg);
   const $ = (id) => document.getElementById(id);
 
   $("auto").addEventListener("change", (e) => send(`set check_updates ${e.target.checked ? "on" : "off"}`));
+  for (const [id, value] of [["tabs_show", "{{tabs_show}}"], ["tabs_position", "{{tabs_position}}"]]) {
+    $(id).value = value;
+    $(id).addEventListener("change", (e) => send(`set ${id} ${e.target.value}`));
+  }
   $("check").addEventListener("click", () => send("update-check"));
   $("install").addEventListener("click", () => send("update-install"));
 

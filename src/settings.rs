@@ -3,7 +3,10 @@
 
 use std::{fs, path::Path};
 
-use crate::update::{CURRENT_VERSION, Status};
+use crate::{
+    tabbar::{Position, Show},
+    update::{CURRENT_VERSION, Status},
+};
 
 const PAGE_HTML: &str = include_str!("settings.html");
 
@@ -16,12 +19,16 @@ pub const SETTINGS_URL: &str = "zeteme://settings/";
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub check_updates: bool,
+    pub tabs_show: Show,
+    pub tabs_position: Position,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             check_updates: true,
+            tabs_show: Show::Auto,
+            tabs_position: Position::Top,
         }
     }
 }
@@ -37,28 +44,49 @@ impl Settings {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
-            if key.trim() == "check_updates" {
-                settings.check_updates = value.trim() != "false";
+            let value = value.trim();
+            match key.trim() {
+                "check_updates" => settings.check_updates = value != "false",
+                "tabs_show" => {
+                    settings.tabs_show = Show::parse(value).unwrap_or(settings.tabs_show)
+                }
+                "tabs_position" => {
+                    settings.tabs_position =
+                        Position::parse(value).unwrap_or(settings.tabs_position)
+                }
+                _ => {}
             }
         }
         settings
     }
 
     pub fn save(&self, file: &Path) {
-        let _ = fs::write(file, format!("check_updates={}\n", self.check_updates));
+        let _ = fs::write(
+            file,
+            format!(
+                "check_updates={}\ntabs_show={}\ntabs_position={}\n",
+                self.check_updates,
+                self.tabs_show.as_str(),
+                self.tabs_position.as_str()
+            ),
+        );
     }
 }
 
 /// The settings page, filled in with the current values.
 pub fn page(settings: &Settings) -> String {
-    PAGE_HTML.replace("{{version}}", CURRENT_VERSION).replace(
-        "{{check_updates}}",
-        if settings.check_updates {
-            "checked"
-        } else {
-            ""
-        },
-    )
+    PAGE_HTML
+        .replace("{{version}}", CURRENT_VERSION)
+        .replace(
+            "{{check_updates}}",
+            if settings.check_updates {
+                "checked"
+            } else {
+                ""
+            },
+        )
+        .replace("{{tabs_show}}", settings.tabs_show.as_str())
+        .replace("{{tabs_position}}", settings.tabs_position.as_str())
 }
 
 /// A script that shows `status` on an open settings page.
@@ -78,7 +106,7 @@ pub fn status_script(status: &Status) -> String {
     )
 }
 
-fn js_string(text: &str) -> String {
+pub fn js_string(text: &str) -> String {
     let mut out = String::from("\"");
     for c in text.chars() {
         match c {
@@ -105,12 +133,17 @@ mod tests {
         assert!(!Settings::parse("check_updates=false\n").check_updates);
         assert!(Settings::parse("check_updates = true").check_updates);
         assert!(Settings::parse("junk\nother=1").check_updates);
+        let tabs = Settings::parse("tabs_show=never\ntabs_position=left\n");
+        assert_eq!(tabs.tabs_show, Show::Never);
+        assert_eq!(tabs.tabs_position, Position::Left);
+        assert_eq!(Settings::parse("tabs_show=bogus").tabs_show, Show::Auto);
     }
 
     #[test]
     fn fills_in_page() {
         let page = page(&Settings {
             check_updates: false,
+            ..Settings::default()
         });
         assert!(page.contains(CURRENT_VERSION));
         assert!(!page.contains("{{"));

@@ -1,5 +1,7 @@
 //! Messages from the page script (`keys.js`) and URL handling.
 
+use crate::tabbar::{Position, Show};
+
 const SEARCH_URL: &str = "https://duckduckgo.com/?q=";
 
 #[derive(Debug, PartialEq)]
@@ -17,6 +19,8 @@ pub enum Command {
     Settings,
     SettingsReady,
     SetCheckUpdates(bool),
+    SetTabsShow(Show),
+    SetTabsPosition(Position),
     CheckUpdate,
     InstallUpdate,
     Quit,
@@ -30,6 +34,8 @@ impl Command {
             self,
             Command::SettingsReady
                 | Command::SetCheckUpdates(_)
+                | Command::SetTabsShow(_)
+                | Command::SetTabsPosition(_)
                 | Command::CheckUpdate
                 | Command::InstallUpdate
         )
@@ -53,9 +59,11 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
         "fullscreen" => Command::Fullscreen(arg == "on"),
         "settings" => Command::Settings,
         "settings-ready" => Command::SettingsReady,
-        "set" => match arg {
-            "check_updates on" => Command::SetCheckUpdates(true),
-            "check_updates off" => Command::SetCheckUpdates(false),
+        "set" => match arg.split_once(' ').unwrap_or((arg, "")) {
+            ("check_updates", "on") => Command::SetCheckUpdates(true),
+            ("check_updates", "off") => Command::SetCheckUpdates(false),
+            ("tabs_show", value) => Command::SetTabsShow(Show::parse(value)?),
+            ("tabs_position", value) => Command::SetTabsPosition(Position::parse(value)?),
             _ => return None,
         },
         "update-check" => Command::CheckUpdate,
@@ -170,6 +178,16 @@ mod tests {
             Some(Command::SetCheckUpdates(false))
         );
         assert_eq!(parse_ipc("set bogus on"), None);
+        assert_eq!(
+            parse_ipc("set tabs_position right"),
+            Some(Command::SetTabsPosition(Position::Right))
+        );
+        assert_eq!(
+            parse_ipc("set tabs_show never"),
+            Some(Command::SetTabsShow(Show::Never))
+        );
+        assert_eq!(parse_ipc("set tabs_show sometimes"), None);
+        assert!(parse_ipc("set tabs_show always").unwrap().settings_only());
         assert!(parse_ipc("update-install").unwrap().settings_only());
         assert!(!parse_ipc("settings").unwrap().settings_only());
         assert_eq!(parse_ipc("open "), None);
