@@ -22,6 +22,16 @@
   #install { display: none; margin-left: 8px; border-color: #a80; }
   #status { margin-left: 12px; color: #aaa; }
   code { font-family: Consolas, monospace; }
+  input[type=text] { font: inherit; color: #fff; background: #333; border: 1px solid #555;
+                     border-radius: 3px; padding: 2px 6px; width: 100%; box-sizing: border-box; }
+  #ext-list { margin: 0 0 16px; }
+  .ext { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .ext span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ext.off span { color: #888; }
+  .ext button { padding: 1px 8px; }
+  #ext-add { display: flex; gap: 8px; margin-bottom: 8px; }
+  #ext-status { color: #aaa; }
+  .note { color: #aaa; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -52,6 +62,18 @@
       <option value="right">right</option>
     </select></label>
 </section>
+<section>
+  <h2>Extensions</h2>
+  <div id="ext-list"></div>
+  <div id="ext-add">
+    <input type="text" id="ext-source" placeholder="Chrome Web Store, Edge or Firefox add-on link, or a folder, .crx, .zip or .xpi">
+    <button id="ext-install">Install</button>
+  </div>
+  <p id="ext-status"></p>
+  <p class="note">zeteme has no toolbar, so an extension's popup opens in a tab:
+    use its Popup button here or <code>:ext name</code>. Firefox-only add-ons
+    rarely load; most also have a Chrome version that does.</p>
+</section>
 <script>
   const send = (msg) => window.ipc.postMessage(msg);
   const $ = (id) => document.getElementById(id);
@@ -78,6 +100,50 @@
     $("check").disabled = state === "checking" || state === "downloading";
     $("install").style.display = state === "available" ? "inline-block" : "none";
     $("install").textContent = `Install ${detail}`;
+  };
+
+  const install = () => {
+    const source = $("ext-source").value.trim();
+    if (source) send(`ext-install ${source}`);
+  };
+  $("ext-install").addEventListener("click", install);
+  $("ext-source").addEventListener("keydown", (e) => { if (e.key === "Enter") install(); });
+
+  const button = (text, msg) => {
+    const b = document.createElement("button");
+    b.textContent = text;
+    b.addEventListener("click", () => send(msg));
+    return b;
+  };
+
+  // Called by zeteme with [id, name, enabled, hasPopup, hasOptions] rows.
+  window.zetemeExtensions = (list, status) => {
+    const rows = list.map(([id, name, enabled, popup, options]) => {
+      const row = document.createElement("div");
+      row.className = enabled ? "ext" : "ext off";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = enabled;
+      box.title = enabled ? "Turn off" : "Turn on";
+      box.addEventListener("change", () => send(`ext-enable ${id} ${box.checked ? "on" : "off"}`));
+      const label = document.createElement("span");
+      label.textContent = name;
+      label.title = id;
+      row.append(box, label);
+      if (popup) row.append(button("Popup", `ext-page ${id} popup`));
+      if (options) row.append(button("Options", `ext-page ${id} options`));
+      row.append(button("Remove", `ext-remove ${id}`));
+      return row;
+    });
+    if (!rows.length) {
+      const none = document.createElement("p");
+      none.className = "note";
+      none.textContent = "No extensions installed.";
+      rows.push(none);
+    }
+    $("ext-list").replaceChildren(...rows);
+    $("ext-status").textContent = status;
+    if (status === "Installed.") $("ext-source").value = "";
   };
 
   send("settings-ready");

@@ -2,6 +2,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod command;
+mod extensions;
 mod settings;
 mod tabbar;
 mod update;
@@ -9,6 +10,7 @@ mod update;
 use std::{borrow::Cow, fs, path::PathBuf, thread, time::Duration};
 
 use command::{Command, normalize_url, parse_ipc};
+use extensions::{Extension, Index, Page};
 use settings::{SETTINGS_URL, Settings, js_string};
 use tabbar::{Extent, Show};
 use tao::{
@@ -17,12 +19,12 @@ use tao::{
     window::{Fullscreen, Window, WindowBuilder},
 };
 use update::Status;
-#[cfg(windows)]
-use wry::WebViewExtWindows;
 use wry::{
     NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
     http::{Request, Response},
 };
+#[cfg(windows)]
+use wry::{WebViewBuilderExtWindows, WebViewExtWindows};
 
 const DEFAULT_URL: &str = "https://duckduckgo.com";
 const ZOOM_STEP: f64 = 0.1;
@@ -42,6 +44,11 @@ enum UserEvent {
     TabBarReady,
     TabBarHover(bool),
     HideTabBar(u64),
+    ExtensionsListed(Result<Vec<Extension>, String>),
+    ExtensionUnpacked(Result<PathBuf, String>),
+    ExtensionAdded(PathBuf, Result<String, String>),
+    ExtensionRemoved(String, Result<(), String>),
+    ExtensionEnabled(Result<(), String>),
 }
 
 struct Tab {
@@ -70,6 +77,11 @@ struct Browser {
     /// Whether the mouse is on the bar, for `Show::Hover`.
     tab_bar_hover: bool,
     fullscreen: bool,
+    extensions: Vec<Extension>,
+    extension_index: Index,
+    extensions_dir: PathBuf,
+    /// What the settings page says about the last extension change.
+    extension_status: String,
 }
 
 /// Where cookies, logins and the saved session live: `%LOCALAPPDATA%\zeteme`.
@@ -94,13 +106,21 @@ fn layout(window: &Window, settings: &Settings, extent: Extent, fullscreen: bool
     )
 }
 
+/// Lets a webview run browser extensions. WebView2 needs every webview on a
+/// profile to agree on this, so the tab bar and all pages get it.
+fn with_extensions(builder: WebViewBuilder) -> WebViewBuilder {
+    #[cfg(windows)]
+    let builder = builder.with_browser_extensions_enabled(true);
+    builder
+}
+
 fn build_tab_bar(
     window: &Window,
     context: &mut WebContext,
     proxy: EventLoopProxy<UserEvent>,
     bounds: Rect,
 ) -> wry::Result<WebView> {
-    WebViewBuilder::new_with_web_context(context)
+    with_extensions(WebViewBuilder::new_with_web_context(context))
         .with_html(tabbar::HTML)
         .with_bounds(bounds)
         .with_visible(false)
@@ -197,7 +217,7 @@ impl Browser {
         let popup_proxy = self.proxy.clone();
         let settings_file = self.settings_file.clone();
         let bounds = self.bounds();
-        let webview = WebViewBuilder::new_with_web_context(&mut self.context)
+        let webview = with_extensions(WebViewBuilder::new_with_web_context(&mut self.context))
             .with_url(url)
             .with_bounds(bounds)
             .with_initialization_script(KEYS_JS)
@@ -324,20 +344,159 @@ impl Browser {
         }
     }
 
-    /// Records the update status and shows it on any open settings page.
-    fn set_update(&mut self, status: Status) {
-        self.update = status;
-        let script = settings::status_script(&self.update);
+    /// Runs `script` on every open settings page.
+    fn eval_settings(&self, script: &str) {
         for tab in &self.tabs {
             if tab
                 .webview
                 .url()
                 .is_ok_and(|url| url.starts_with(SETTINGS_URL))
             {
-                let _ = tab.webview.evaluate_script(&script);
+                let _ = tab.webview.evaluate_script(script);
             }
         }
+    }
+
+    /// Records the update status and shows it on any open settings page.
+    fn set_update(&mut self, status: Status) {
+        self.update = status;
+        self.eval_settings(&settings::status_script(&self.update));
         self.update_title();
+    }
+
+    /// Shows the installed extensions on any open settings page.
+    fn show_extensions(&self) {
+        let list: Vec<settings::ExtensionRow> = self
+            .extensions
+            .iter()
+            .map(|ext| {
+                let folder = self.extension_index.folder(&ext.id);
+                let has = |page| {
+                    folder
+                        .and_then(|f| extensions::page_path(f, page))
+                        .is_some()
+                };
+                settings::ExtensionRow {
+                    extension: ext,
+                    popup: has(Page::Popup),
+                    options: has(Page::Options),
+                }
+            })
+            .collect();
+        self.eval_settings(&settings::extensions_script(&list, &self.extension_status));
+    }
+
+    fn set_extension_status(&mut self, status: impl Into<String>) {
+        self.extension_status = status.into();
+        self.show_extensions();
+    }
+
+    /// Asks WebView2 for the installed extensions.
+    fn refresh_extensions(&self) {
+        #[cfg(windows)]
+        {
+            let proxy = self.proxy.clone();
+            extensions::webview2::list(
+                &self.tab_bar,
+                Box::new(move |result| {
+                    let _ = proxy.send_event(UserEvent::ExtensionsListed(result));
+                }),
+            );
+        }
+    }
+
+    fn install_extension(&mut self, source: String) {
+        if cfg!(not(windows)) {
+            self.set_extension_status("Extensions need WebView2, on Windows.");
+            return;
+        }
+        self.set_extension_status("Installing...");
+        let dir = self.extensions_dir.clone();
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let result = extensions::unpack(&source, &dir);
+            let _ = proxy.send_event(UserEvent::ExtensionUnpacked(result));
+        });
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn add_extension(&mut self, folder: PathBuf) {
+        #[cfg(windows)]
+        {
+            let proxy = self.proxy.clone();
+            let added = folder.clone();
+            extensions::webview2::add(
+                &self.tab_bar,
+                &folder,
+                Box::new(move |result| {
+                    let _ = proxy.send_event(UserEvent::ExtensionAdded(added, result));
+                }),
+            );
+        }
+    }
+
+    fn remove_extension(&mut self, id: String) {
+        #[cfg(windows)]
+        {
+            let proxy = self.proxy.clone();
+            let removed = id.clone();
+            extensions::webview2::remove(
+                &self.tab_bar,
+                id,
+                Box::new(move |result| {
+                    let _ = proxy.send_event(UserEvent::ExtensionRemoved(removed, result));
+                }),
+            );
+        }
+        #[cfg(not(windows))]
+        let _ = id;
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn enable_extension(&mut self, id: String, on: bool) {
+        #[cfg(windows)]
+        {
+            let proxy = self.proxy.clone();
+            extensions::webview2::enable(
+                &self.tab_bar,
+                id,
+                on,
+                Box::new(move |result| {
+                    let _ = proxy.send_event(UserEvent::ExtensionEnabled(result));
+                }),
+            );
+        }
+    }
+
+    /// Opens an extension's popup or options page in a new tab, since
+    /// zeteme has no toolbar for it to drop down from.
+    fn open_extension_page(&mut self, id: &str, page: Page) -> bool {
+        let path = self
+            .extension_index
+            .folder(id)
+            .and_then(|folder| extensions::page_path(folder, page));
+        match path {
+            Some(path) => self.open_tab(&extensions::page_url(id, &path)).is_ok(),
+            None => false,
+        }
+    }
+
+    /// `:ext <name>`: the popup (or else options) of the first extension
+    /// whose name contains `name`; the extension list without one.
+    fn open_extension(&mut self, name: &str) {
+        let name = name.to_lowercase();
+        let found = self
+            .extensions
+            .iter()
+            .find(|ext| !name.is_empty() && ext.name.to_lowercase().contains(&name))
+            .map(|ext| ext.id.clone());
+        let opened = found.is_some_and(|id| {
+            self.open_extension_page(&id, Page::Popup)
+                || self.open_extension_page(&id, Page::Options)
+        });
+        if !opened {
+            self.open_settings();
+        }
     }
 
     fn check_for_update(&mut self) {
@@ -400,7 +559,11 @@ impl Browser {
                 self.layout();
             }
             Command::Settings => self.open_settings(),
-            Command::SettingsReady => self.set_update(self.update.clone()),
+            Command::SettingsReady => {
+                self.set_update(self.update.clone());
+                self.show_extensions();
+                self.refresh_extensions();
+            }
             Command::SetCheckUpdates(on) => {
                 self.settings.check_updates = on;
                 self.settings.save(&self.settings_file);
@@ -418,6 +581,13 @@ impl Browser {
             }
             Command::CheckUpdate => self.check_for_update(),
             Command::InstallUpdate => self.install_update(),
+            Command::Extension(name) => self.open_extension(&name),
+            Command::ExtensionInstall(source) => self.install_extension(source),
+            Command::ExtensionRemove(id) => self.remove_extension(id),
+            Command::ExtensionEnable(id, on) => self.enable_extension(id, on),
+            Command::ExtensionPage(id, page) => {
+                self.open_extension_page(&id, page);
+            }
             Command::Quit => return false,
         }
         true
@@ -429,6 +599,8 @@ fn main() -> wry::Result<()> {
     let _ = fs::create_dir_all(&data_dir);
     let session_file = data_dir.join("session.txt");
     let settings_file = data_dir.join("settings.txt");
+    let extensions_dir = data_dir.join("extensions");
+    let _ = fs::create_dir_all(&extensions_dir);
     let settings = Settings::load(&settings_file);
 
     // Restore the last session, then open any URL given on the command line.
@@ -478,10 +650,15 @@ fn main() -> wry::Result<()> {
         tab_bar_timer: 0,
         tab_bar_hover: false,
         fullscreen: false,
+        extensions: Vec::new(),
+        extension_index: Index::load(&extensions_dir),
+        extensions_dir,
+        extension_status: String::new(),
     };
     for url in &urls {
         browser.open_tab(url)?;
     }
+    browser.refresh_extensions();
     if browser.settings.check_updates {
         browser.check_for_update();
     }
@@ -546,6 +723,59 @@ fn main() -> wry::Result<()> {
                         true
                     }
                 }
+            }
+            Event::UserEvent(UserEvent::ExtensionsListed(result)) => {
+                match result {
+                    Ok(list) => {
+                        browser.extensions = list;
+                        browser.show_extensions();
+                    }
+                    Err(err) => {
+                        browser.set_extension_status(format!("Could not list extensions: {err}"))
+                    }
+                }
+                true
+            }
+            Event::UserEvent(UserEvent::ExtensionUnpacked(result)) => {
+                match result {
+                    Ok(folder) => browser.add_extension(folder),
+                    Err(err) => browser.set_extension_status(format!("Install failed: {err}")),
+                }
+                true
+            }
+            Event::UserEvent(UserEvent::ExtensionAdded(folder, result)) => {
+                match result {
+                    Ok(id) => {
+                        browser.extension_index.insert(id, folder);
+                        browser.set_extension_status("Installed.");
+                    }
+                    Err(err) => {
+                        extensions::discard(&browser.extensions_dir, &folder);
+                        browser.set_extension_status(format!("WebView2 would not load it: {err}"));
+                    }
+                }
+                browser.refresh_extensions();
+                true
+            }
+            Event::UserEvent(UserEvent::ExtensionRemoved(id, result)) => {
+                match result {
+                    Ok(()) => {
+                        if let Some(folder) = browser.extension_index.remove(&id) {
+                            extensions::discard(&browser.extensions_dir, &folder);
+                        }
+                        browser.set_extension_status("Removed.");
+                    }
+                    Err(err) => browser.set_extension_status(format!("Remove failed: {err}")),
+                }
+                browser.refresh_extensions();
+                true
+            }
+            Event::UserEvent(UserEvent::ExtensionEnabled(result)) => {
+                if let Err(err) = result {
+                    browser.set_extension_status(format!("Could not switch it: {err}"));
+                }
+                browser.refresh_extensions();
+                true
             }
             Event::UserEvent(UserEvent::Title(id, title)) => {
                 if let Some(tab) = browser.tabs.iter_mut().find(|tab| tab.id == id) {
