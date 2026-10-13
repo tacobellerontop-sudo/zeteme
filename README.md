@@ -92,7 +92,8 @@ Keys work the same when an embedded player or other frame has focus.
 | `Esc` | Leave insert mode, close the command bar or cancel hints |
 
 Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`), `:close`,
-`:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:quit` (`:q`).
+`:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:ext <name>`,
+`:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
@@ -104,7 +105,28 @@ also have it come up when the mouse reaches its edge of the window, show it
 always (pages make room for it) or never, and put it at the top, bottom, left
 or right.
 
+## Extensions
+
+zeteme runs Chromium (Chrome and Edge) extensions through WebView2's own
+extension support, so it needs WebView2 Runtime 120 or newer. Install them
+in the Extensions section of `:settings` from a Chrome Web Store, Edge
+Add-ons or Firefox Add-ons link, or from an unpacked extension folder or a
+`.crx`, `.zip` or `.xpi` file. The same section turns them on and off and
+removes them.
+
+- There is no toolbar, so an extension's popup opens in a tab instead:
+  `:ext <part of its name>` or its Popup button in `:settings`. Popups that
+  act on "the current tab" see that tab rather than the page you came from.
+- Store installs are a copy: they don't update by themselves. Install again
+  to update.
+- Firefox add-ons use the same WebExtension format, but WebView2 only loads
+  what Chromium does: most Firefox-only add-ons fail to load (WebView2 says
+  why on the settings page), so use their Chrome version where there is one.
+- Content scripts, background workers and request blocking run as in
+  Chrome; anything that needs Chrome's own UI (toolbar badges, side panels,
+  `chrome://extensions`) isn't there.
+
 ## Data
 
-Cookies, logins, settings and the open tabs are kept in `%LOCALAPPDATA%\zeteme`, so
+Cookies, logins, settings, extensions and the open tabs are kept in `%LOCALAPPDATA%\zeteme`, so
 zeteme reopens where you left off. Downloads go to your Downloads folder.

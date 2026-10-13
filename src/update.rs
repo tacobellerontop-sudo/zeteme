@@ -30,7 +30,7 @@ pub enum Status {
 }
 
 /// Runs curl without flashing a console window.
-fn curl(args: &[&str]) -> Result<String, String> {
+pub(crate) fn curl(args: &[&str]) -> Result<String, String> {
     let mut command = Command::new("curl");
     command
         .args(["--silent", "--show-error", "--proto", "=https"])

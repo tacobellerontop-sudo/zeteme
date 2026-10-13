@@ -1,6 +1,9 @@
 //! Messages from the page script (`keys.js`) and URL handling.
 
-use crate::tabbar::{Position, Show};
+use crate::{
+    extensions::Page,
+    tabbar::{Position, Show},
+};
 
 const SEARCH_URL: &str = "https://duckduckgo.com/?q=";
 
@@ -23,6 +26,12 @@ pub enum Command {
     SetTabsPosition(Position),
     CheckUpdate,
     InstallUpdate,
+    /// Opens the popup of the extension whose name contains this.
+    Extension(String),
+    ExtensionInstall(String),
+    ExtensionRemove(String),
+    ExtensionEnable(String, bool),
+    ExtensionPage(String, Page),
     Quit,
 }
 
@@ -38,6 +47,10 @@ impl Command {
                 | Command::SetTabsPosition(_)
                 | Command::CheckUpdate
                 | Command::InstallUpdate
+                | Command::ExtensionInstall(_)
+                | Command::ExtensionRemove(_)
+                | Command::ExtensionEnable(..)
+                | Command::ExtensionPage(..)
         )
     }
 }
@@ -68,6 +81,18 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
         },
         "update-check" => Command::CheckUpdate,
         "update-install" => Command::InstallUpdate,
+        "ext" => Command::Extension(arg.to_string()),
+        "ext-install" if !arg.is_empty() => Command::ExtensionInstall(arg.to_string()),
+        "ext-remove" if !arg.is_empty() => Command::ExtensionRemove(arg.to_string()),
+        "ext-enable" => match arg.split_once(' ')? {
+            (id, "on") => Command::ExtensionEnable(id.to_string(), true),
+            (id, "off") => Command::ExtensionEnable(id.to_string(), false),
+            _ => return None,
+        },
+        "ext-page" => {
+            let (id, page) = arg.split_once(' ')?;
+            Command::ExtensionPage(id.to_string(), Page::parse(page)?)
+        }
         "quit" => Command::Quit,
         _ => return None,
     };
@@ -190,6 +215,23 @@ mod tests {
         assert!(parse_ipc("set tabs_show always").unwrap().settings_only());
         assert!(parse_ipc("update-install").unwrap().settings_only());
         assert!(!parse_ipc("settings").unwrap().settings_only());
+        assert_eq!(
+            parse_ipc("ext-install C:\\My Extensions\\ublock"),
+            Some(Command::ExtensionInstall(
+                "C:\\My Extensions\\ublock".into()
+            ))
+        );
+        assert_eq!(
+            parse_ipc("ext-enable abc off"),
+            Some(Command::ExtensionEnable("abc".into(), false))
+        );
+        assert_eq!(
+            parse_ipc("ext-page abc options"),
+            Some(Command::ExtensionPage("abc".into(), Page::Options))
+        );
+        assert_eq!(parse_ipc("ext-page abc toolbar"), None);
+        assert!(parse_ipc("ext-remove abc").unwrap().settings_only());
+        assert!(!parse_ipc("ext bitwarden").unwrap().settings_only());
         assert_eq!(parse_ipc("open "), None);
         assert_eq!(parse_ipc("bogus"), None);
     }

@@ -4,6 +4,7 @@
 use std::{fs, path::Path};
 
 use crate::{
+    extensions::Extension,
     tabbar::{Position, Show},
     update::{CURRENT_VERSION, Status},
 };
@@ -106,6 +107,36 @@ pub fn status_script(status: &Status) -> String {
     )
 }
 
+/// An installed extension as the settings page lists it.
+pub struct ExtensionRow<'a> {
+    pub extension: &'a Extension,
+    pub popup: bool,
+    pub options: bool,
+}
+
+/// A script that lists `rows` on an open settings page, with `status` about
+/// the last install or removal.
+pub fn extensions_script(rows: &[ExtensionRow], status: &str) -> String {
+    let rows: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            format!(
+                "[{}, {}, {}, {}, {}]",
+                js_string(&row.extension.id),
+                js_string(&row.extension.name),
+                row.extension.enabled,
+                row.popup,
+                row.options
+            )
+        })
+        .collect();
+    format!(
+        "window.zetemeExtensions && zetemeExtensions([{}], {})",
+        rows.join(", "),
+        js_string(status)
+    )
+}
+
 pub fn js_string(text: &str) -> String {
     let mut out = String::from("\"");
     for c in text.chars() {
@@ -147,6 +178,24 @@ mod tests {
         });
         assert!(page.contains(CURRENT_VERSION));
         assert!(!page.contains("{{"));
+    }
+
+    #[test]
+    fn lists_extensions() {
+        let extension = Extension {
+            id: "abc".into(),
+            name: "uBlock \"Lite\"".into(),
+            enabled: true,
+        };
+        let rows = [ExtensionRow {
+            extension: &extension,
+            popup: true,
+            options: false,
+        }];
+        assert_eq!(
+            extensions_script(&rows, ""),
+            r#"window.zetemeExtensions && zetemeExtensions([["abc", "uBlock \"Lite\"", true, true, false]], "")"#
+        );
     }
 
     #[test]
