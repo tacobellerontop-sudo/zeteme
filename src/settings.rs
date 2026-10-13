@@ -20,6 +20,8 @@ pub const SETTINGS_URL: &str = "zeteme://settings/";
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub check_updates: bool,
+    /// WebView2's own password manager: offers to save logins and fills them.
+    pub save_passwords: bool,
     pub tabs_show: Show,
     pub tabs_position: Position,
 }
@@ -28,6 +30,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             check_updates: true,
+            save_passwords: true,
             tabs_show: Show::Auto,
             tabs_position: Position::Top,
         }
@@ -48,6 +51,7 @@ impl Settings {
             let value = value.trim();
             match key.trim() {
                 "check_updates" => settings.check_updates = value != "false",
+                "save_passwords" => settings.save_passwords = value != "false",
                 "tabs_show" => {
                     settings.tabs_show = Show::parse(value).unwrap_or(settings.tabs_show)
                 }
@@ -65,8 +69,9 @@ impl Settings {
         let _ = fs::write(
             file,
             format!(
-                "check_updates={}\ntabs_show={}\ntabs_position={}\n",
+                "check_updates={}\nsave_passwords={}\ntabs_show={}\ntabs_position={}\n",
                 self.check_updates,
+                self.save_passwords,
                 self.tabs_show.as_str(),
                 self.tabs_position.as_str()
             ),
@@ -81,6 +86,14 @@ pub fn page(settings: &Settings) -> String {
         .replace(
             "{{check_updates}}",
             if settings.check_updates {
+                "checked"
+            } else {
+                ""
+            },
+        )
+        .replace(
+            "{{save_passwords}}",
+            if settings.save_passwords {
                 "checked"
             } else {
                 ""
@@ -164,6 +177,8 @@ mod tests {
         assert!(!Settings::parse("check_updates=false\n").check_updates);
         assert!(Settings::parse("check_updates = true").check_updates);
         assert!(Settings::parse("junk\nother=1").check_updates);
+        assert!(Settings::parse("").save_passwords);
+        assert!(!Settings::parse("save_passwords=false").save_passwords);
         let tabs = Settings::parse("tabs_show=never\ntabs_position=left\n");
         assert_eq!(tabs.tabs_show, Show::Never);
         assert_eq!(tabs.tabs_position, Position::Left);

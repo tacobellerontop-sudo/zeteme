@@ -84,7 +84,7 @@ impl Position {
     }
 }
 
-fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
+pub fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
     Rect {
         position: PhysicalPosition::new(x, y).into(),
         size: PhysicalSize::new(width, height).into(),
