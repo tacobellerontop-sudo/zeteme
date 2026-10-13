@@ -39,6 +39,10 @@
     const tab = document.body.children[current];
     if (tab) tab.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
+  // In "on hover" mode zeteme leaves a strip of the bar at the window's
+  // edge; the mouse reaching it brings up the whole bar.
+  document.documentElement.addEventListener("mouseenter", () => window.ipc.postMessage("hover on"));
+  document.documentElement.addEventListener("mouseleave", () => window.ipc.postMessage("hover off"));
   window.ipc.postMessage("ready");
 </script>
 </body>

@@ -8,18 +8,24 @@ use wry::{
 
 pub const HTML: &str = include_str!("tabbar.html");
 
-/// How long the bar stays up after switching tabs in `Show::Auto`.
+/// How long the bar stays up after switching tabs in `Show::Auto` and
+/// `Show::Hover`.
 pub const AUTO_HIDE_MS: u64 = 1500;
 
 /// Logical pixels: the height of a bar at the top or bottom, and the width
 /// of one at the side.
 const HEIGHT: f64 = 22.0;
 const WIDTH: f64 = 200.0;
+/// Logical pixels of the bar left at the window's edge in `Show::Hover`,
+/// for the mouse to find.
+const EDGE: f64 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Show {
     /// Over the page, briefly, when tabs are opened, closed or switched.
     Auto,
+    /// Like `Auto`, and also while the mouse is at the bar's edge of the window.
+    Hover,
     Always,
     Never,
 }
@@ -36,6 +42,7 @@ impl Show {
     pub fn parse(text: &str) -> Option<Show> {
         match text {
             "auto" => Some(Show::Auto),
+            "hover" => Some(Show::Hover),
             "always" => Some(Show::Always),
             "never" => Some(Show::Never),
             _ => None,
@@ -45,6 +52,7 @@ impl Show {
     pub fn as_str(self) -> &'static str {
         match self {
             Show::Auto => "auto",
+            Show::Hover => "hover",
             Show::Always => "always",
             Show::Never => "never",
         }
@@ -83,22 +91,38 @@ fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
     }
 }
 
+/// How much of the bar is on screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Extent {
+    Full,
+    /// Just a strip along the window's edge.
+    Edge,
+    None,
+}
+
 /// Where the bar and the pages go in a window of `width` x `height` physical
 /// pixels. With `reserve` the pages make room for the bar; otherwise the bar
 /// is drawn over them.
 pub fn layout(
     position: Position,
+    extent: Extent,
     reserve: bool,
     width: u32,
     height: u32,
     scale: f64,
 ) -> (Rect, Rect) {
-    let size = if position.vertical() {
-        ((WIDTH * scale) as u32).min(width / 2)
+    let (full, limit) = if position.vertical() {
+        ((WIDTH * scale) as u32, width / 2)
     } else {
-        ((HEIGHT * scale) as u32).min(height / 2)
+        ((HEIGHT * scale) as u32, height / 2)
     };
-    let room = if reserve { size } else { 0 };
+    let full = full.min(limit);
+    let size = match extent {
+        Extent::Full => full,
+        Extent::Edge => ((EDGE * scale) as u32).clamp(1, full),
+        Extent::None => 0,
+    };
+    let room = if reserve { full } else { 0 };
     match position {
         Position::Top => (rect(0, 0, width, size), rect(0, room, width, height - room)),
         Position::Bottom => (
@@ -163,33 +187,43 @@ mod tests {
 
     #[test]
     fn lays_out_each_side() {
-        let (bar, page) = layout(Position::Top, true, 1000, 800, 1.0);
+        let (bar, page) = layout(Position::Top, Extent::Full, true, 1000, 800, 1.0);
         assert_eq!(physical(bar), (0, 0, 1000, 22));
         assert_eq!(physical(page), (0, 22, 1000, 778));
 
-        let (bar, page) = layout(Position::Bottom, true, 1000, 800, 2.0);
+        let (bar, page) = layout(Position::Bottom, Extent::Full, true, 1000, 800, 2.0);
         assert_eq!(physical(bar), (0, 756, 1000, 44));
         assert_eq!(physical(page), (0, 0, 1000, 756));
 
-        let (bar, page) = layout(Position::Left, true, 1000, 800, 1.0);
+        let (bar, page) = layout(Position::Left, Extent::Full, true, 1000, 800, 1.0);
         assert_eq!(physical(bar), (0, 0, 200, 800));
         assert_eq!(physical(page), (200, 0, 800, 800));
 
-        let (bar, page) = layout(Position::Right, false, 1000, 800, 1.0);
+        let (bar, page) = layout(Position::Right, Extent::Full, false, 1000, 800, 1.0);
         assert_eq!(physical(bar), (800, 0, 200, 800));
         assert_eq!(physical(page), (0, 0, 1000, 800));
     }
 
     #[test]
+    fn shrinks_to_the_edge() {
+        let (bar, page) = layout(Position::Right, Extent::Edge, false, 1000, 800, 1.5);
+        assert_eq!(physical(bar), (994, 0, 6, 800));
+        assert_eq!(physical(page), (0, 0, 1000, 800));
+
+        let (bar, _) = layout(Position::Bottom, Extent::None, false, 1000, 800, 1.0);
+        assert_eq!(physical(bar), (0, 800, 1000, 0));
+    }
+
+    #[test]
     fn fits_tiny_windows() {
-        let (bar, page) = layout(Position::Left, true, 100, 10, 1.0);
+        let (bar, page) = layout(Position::Left, Extent::Full, true, 100, 10, 1.0);
         assert_eq!(physical(bar), (0, 0, 50, 10));
         assert_eq!(physical(page), (50, 0, 50, 10));
     }
 
     #[test]
     fn parses_names() {
-        for show in [Show::Auto, Show::Always, Show::Never] {
+        for show in [Show::Auto, Show::Hover, Show::Always, Show::Never] {
             assert_eq!(Show::parse(show.as_str()), Some(show));
         }
         for position in [

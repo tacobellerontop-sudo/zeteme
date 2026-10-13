@@ -100,8 +100,9 @@ Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
 A tab bar pops up over the page for a moment when you open, close or switch
 tabs, then hides again; clicking a tab switches to it. In `:settings` you can
-have it shown always (pages make room for it) or never, and put it at the
-top, bottom, left or right of the window.
+also have it come up when the mouse reaches its edge of the window, show it
+always (pages make room for it) or never, and put it at the top, bottom, left
+or right.
 
 ## Data
 

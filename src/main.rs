@@ -10,7 +10,7 @@ use std::{borrow::Cow, fs, path::PathBuf, thread, time::Duration};
 
 use command::{Command, normalize_url, parse_ipc};
 use settings::{SETTINGS_URL, Settings, js_string};
-use tabbar::Show;
+use tabbar::{Extent, Show};
 use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
@@ -26,6 +26,8 @@ use wry::{
 
 const DEFAULT_URL: &str = "https://duckduckgo.com";
 const ZOOM_STEP: f64 = 0.1;
+/// What shows before a page has drawn, instead of white: the tab bar's grey.
+const BACKGROUND: (u8, u8, u8, u8) = (30, 30, 30, 255);
 
 /// Injected into every page; handles the vim keybindings, hints and command bar.
 const KEYS_JS: &str = include_str!("keys.js");
@@ -38,6 +40,7 @@ enum UserEvent {
     UpdateDownloaded(PathBuf),
     SelectTab(usize),
     TabBarReady,
+    TabBarHover(bool),
     HideTabBar(u64),
 }
 
@@ -64,6 +67,8 @@ struct Browser {
     /// Whether the bar is up in `Show::Auto`, and which timer may hide it.
     tab_bar_up: bool,
     tab_bar_timer: u64,
+    /// Whether the mouse is on the bar, for `Show::Hover`.
+    tab_bar_hover: bool,
     fullscreen: bool,
 }
 
@@ -76,11 +81,12 @@ fn data_dir() -> PathBuf {
 }
 
 /// Lays out the tab bar and pages in `window`, returning (bar, pages).
-fn layout(window: &Window, settings: &Settings, fullscreen: bool) -> (Rect, Rect) {
+fn layout(window: &Window, settings: &Settings, extent: Extent, fullscreen: bool) -> (Rect, Rect) {
     let size = window.inner_size();
     let reserve = settings.tabs_show == Show::Always && !fullscreen;
     tabbar::layout(
         settings.tabs_position,
+        extent,
         reserve,
         size.width,
         size.height,
@@ -98,10 +104,13 @@ fn build_tab_bar(
         .with_html(tabbar::HTML)
         .with_bounds(bounds)
         .with_visible(false)
+        .with_background_color(BACKGROUND)
         .with_ipc_handler(move |req: Request<String>| {
             let msg = req.body();
             let event = if msg == "ready" {
                 UserEvent::TabBarReady
+            } else if let Some(on) = msg.strip_prefix("hover ") {
+                UserEvent::TabBarHover(on == "on")
             } else if let Some(index) = msg.strip_prefix("select ").and_then(|i| i.parse().ok()) {
                 UserEvent::SelectTab(index)
             } else {
@@ -114,23 +123,29 @@ fn build_tab_bar(
 
 impl Browser {
     fn bounds(&self) -> Rect {
-        layout(&self.window, &self.settings, self.fullscreen).1
+        layout(&self.window, &self.settings, Extent::Full, self.fullscreen).1
     }
 
     /// Places the bar and pages for the current settings and window size.
     fn layout(&self) {
-        let (bar, pages) = layout(&self.window, &self.settings, self.fullscreen);
+        let up = self.tab_bar_up;
+        let extent = match self.settings.tabs_show {
+            Show::Always => Extent::Full,
+            Show::Auto if up => Extent::Full,
+            Show::Hover if up || self.tab_bar_hover => Extent::Full,
+            Show::Hover => Extent::Edge,
+            Show::Auto | Show::Never => Extent::None,
+        };
+        let (bar, pages) = layout(&self.window, &self.settings, extent, self.fullscreen);
         for tab in &self.tabs {
             let _ = tab.webview.set_bounds(pages);
         }
+        // A bar that is out of the way is shrunk rather than hidden: a hidden
+        // webview flashes white while it starts drawing again.
         let _ = self.tab_bar.set_bounds(bar);
-        let visible = !self.fullscreen
-            && match self.settings.tabs_show {
-                Show::Always => true,
-                Show::Auto => self.tab_bar_up,
-                Show::Never => false,
-            };
-        let _ = self.tab_bar.set_visible(visible);
+        let _ = self
+            .tab_bar
+            .set_visible(!self.fullscreen && self.settings.tabs_show != Show::Never);
         // Pages opened later are stacked above the bar.
         #[cfg(windows)]
         tabbar::raise(self.tab_bar.hwnd().0);
@@ -157,9 +172,9 @@ impl Browser {
         ));
     }
 
-    /// In `Show::Auto`, shows the bar for a moment.
+    /// In `Show::Auto` and `Show::Hover`, shows the bar for a moment.
     fn flash_tab_bar(&mut self) {
-        if self.settings.tabs_show != Show::Auto {
+        if !matches!(self.settings.tabs_show, Show::Auto | Show::Hover) {
             return;
         }
         self.tab_bar_up = true;
@@ -186,6 +201,7 @@ impl Browser {
             .with_url(url)
             .with_bounds(bounds)
             .with_initialization_script(KEYS_JS)
+            .with_background_color(BACKGROUND)
             .with_custom_protocol("zeteme".into(), move |_, _| {
                 let page = settings::page(&Settings::load(&settings_file));
                 Response::builder()
@@ -229,8 +245,13 @@ impl Browser {
 
     fn select(&mut self, index: usize) {
         self.current = index;
+        // Show the new tab before hiding the old one, so the window behind
+        // them never shows through.
+        let _ = self.tabs[index].webview.set_visible(true);
         for (i, tab) in self.tabs.iter().enumerate() {
-            let _ = tab.webview.set_visible(i == index);
+            if i != index {
+                let _ = tab.webview.set_visible(false);
+            }
         }
         let _ = self.tabs[index].webview.focus();
         self.update_title();
@@ -427,6 +448,7 @@ fn main() -> wry::Result<()> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_title("zeteme")
+        .with_background_color(BACKGROUND)
         .build(&event_loop)
         .expect("failed to create window");
 
@@ -436,7 +458,7 @@ fn main() -> wry::Result<()> {
         &window,
         &mut context,
         proxy.clone(),
-        layout(&window, &settings, false).0,
+        layout(&window, &settings, Extent::None, false).0,
     )?;
 
     let mut browser = Browser {
@@ -454,6 +476,7 @@ fn main() -> wry::Result<()> {
         tab_bar,
         tab_bar_up: false,
         tab_bar_timer: 0,
+        tab_bar_hover: false,
         fullscreen: false,
     };
     for url in &urls {
@@ -495,6 +518,11 @@ fn main() -> wry::Result<()> {
             }
             Event::UserEvent(UserEvent::TabBarReady) => {
                 browser.draw_tab_bar();
+                true
+            }
+            Event::UserEvent(UserEvent::TabBarHover(on)) => {
+                browser.tab_bar_hover = on;
+                browser.layout();
                 true
             }
             Event::UserEvent(UserEvent::HideTabBar(timer)) => {
