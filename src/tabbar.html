@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e1e; }
+  body { display: flex; font: 12px/22px "Segoe UI", sans-serif; color: #aaa;
+         user-select: none; cursor: default; }
+  body.vertical { flex-direction: column; overflow-y: auto; }
+  div { flex: 1 1 0; min-width: 0; max-width: 240px; padding: 0 8px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        border-right: 1px solid #333; }
+  .vertical div { flex: none; max-width: none; border-right: 0; border-bottom: 1px solid #333; }
+  div:hover { background: #2a2a2a; }
+  div.current { background: #3a3a3a; color: #fff; }
+  b { font-weight: normal; color: #777; margin-right: 6px; }
+  .current b { color: #bbb; }
+</style>
+</head>
+<body>
+<script>
+  // Called by zeteme with every tab's title, the current tab and the layout.
+  window.zetemeTabs = (titles, current, vertical) => {
+    document.body.className = vertical ? "vertical" : "";
+    document.body.replaceChildren(...titles.map((title, i) => {
+      const tab = document.createElement("div");
+      const number = document.createElement("b");
+      number.textContent = i + 1;
+      tab.append(number, title || "New tab");
+      tab.title = title;
+      if (i === current) tab.className = "current";
+      tab.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        window.ipc.postMessage(`select ${i}`);
+      });
+      return tab;
+    }));
+    const tab = document.body.children[current];
+    if (tab) tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+  // In "on hover" mode zeteme leaves a strip of the bar at the window's
+  // edge; the mouse reaching it brings up the whole bar.
+  document.documentElement.addEventListener("mouseenter", () => window.ipc.postMessage("hover on"));
+  document.documentElement.addEventListener("mouseleave", () => window.ipc.postMessage("hover off"));
+  window.ipc.postMessage("ready");
+</script>
+</body>
+</html>

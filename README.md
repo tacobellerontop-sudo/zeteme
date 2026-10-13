@@ -64,7 +64,7 @@ time. Video fullscreen fills the screen; `Esc` leaves it.
 
 ## Keys
 
-zeteme has no toolbar; everything is done from the keyboard, with bindings
+zeteme has no toolbar and only a pop-up tab bar; everything is done from the keyboard, with bindings
 modeled on qutebrowser. Clicking or tabbing into a text field puts you in
 insert mode, where keys go to the page until you press `Esc`. A field the page
 focuses by itself (a search box on load, say) doesn't: click it or press `i`.
@@ -95,6 +95,14 @@ Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`), `:close`,
 `:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
+
+## Tabs
+
+A tab bar pops up over the page for a moment when you open, close or switch
+tabs, then hides again; clicking a tab switches to it. In `:settings` you can
+also have it come up when the mouse reaches its edge of the window, show it
+always (pages make room for it) or never, and put it at the top, bottom, left
+or right.
 
 ## Data
 

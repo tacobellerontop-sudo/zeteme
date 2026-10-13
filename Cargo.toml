@@ -1,6 +1,6 @@
 [package]
 name = "zeteme"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "A minimal, keyboard-driven web browser for Windows, in the spirit of qutebrowser"
 repository = "https://github.com/tacobellerontop-sudo/zeteme"
