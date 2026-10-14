@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e1e; }
+  body { font: 13px/20px Consolas, monospace; color: #ddd; border-top: 1px solid #444;
+         box-sizing: border-box; padding: 1px 6px; }
+  input { all: unset; width: 50%; color: #fff; }
+  div { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  b { font-weight: normal; color: #fc3; }
+</style>
+</head>
+<body>
+<script>
+  // Shown over the bottom of the window by zeteme, in a webview of its own,
+  // so the page can't read what is typed or listed here.
+  const PROMPT = {{prompt}};
+  const send = (msg) => window.ipc.postMessage(msg);
+  const label = document.createElement("span");
+  label.textContent = PROMPT.label;
+  document.body.append(label);
+
+  if (PROMPT.kind === "password") {
+    const input = document.createElement("input");
+    input.type = "password";
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send(`unlock ${input.value}`);
+      else if (e.key === "Escape") send("cancel");
+    });
+    document.body.append(input);
+    input.focus();
+    addEventListener("focus", () => input.focus());
+  } else {
+    // One row per login; its number picks it.
+    PROMPT.items.forEach((text, i) => {
+      const row = document.createElement("div");
+      const key = document.createElement("b");
+      key.textContent = `${i + 1} `;
+      row.append(key, text);
+      row.addEventListener("mousedown", () => send(`pick ${i}`));
+      document.body.append(row);
+    });
+    addEventListener("keydown", (e) => {
+      const n = Number(e.key);
+      if (n >= 1 && n <= PROMPT.items.length) send(`pick ${n - 1}`);
+      else if (e.key === "Escape") send("cancel");
+    });
+  }
+</script>
+</body>
+</html>

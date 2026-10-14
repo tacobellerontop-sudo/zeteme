@@ -88,12 +88,13 @@ Keys work the same when an embedded player or other frame has focus.
 | `yy` | Copy the current URL |
 | `gi` | Focus the first text field |
 | `i` | Type into the field the page focused |
+| `Ctrl-Shift-L` | Fill the login form from Bitwarden |
 | `:` | Command bar |
 | `Esc` | Leave insert mode, close the command bar or cancel hints |
 
 Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`), `:close`,
 `:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:ext <name>`,
-`:quit` (`:q`).
+`:bw` / `:bw lock`, `:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
@@ -104,6 +105,26 @@ tabs, then hides again; clicking a tab switches to it. In `:settings` you can
 also have it come up when the mouse reaches its edge of the window, show it
 always (pages make room for it) or never, and put it at the top, bottom, left
 or right.
+
+## Passwords
+
+zeteme saves and fills passwords with WebView2's built-in password manager,
+the one in Chrome and Edge: it offers to save a login when you sign in and
+fills it in next time. The passwords stay on this computer, in zeteme's
+profile; it doesn't sync with a Google or Microsoft account. `:settings`
+turns it off.
+
+To fill logins from Bitwarden, like qutebrowser's `qute-bitwarden`, install
+the [Bitwarden CLI](https://bitwarden.com/help/cli/) so `bw` is on your
+PATH and run `bw login` once. Then press `Ctrl-Shift-L` (or type `:bw`) on a
+login page: zeteme asks for your master password the first time, fills the
+username and password of the login saved for the site (or lets you pick one
+with its number), and copies its one-time code, if it has one. The vault
+stays unlocked until zeteme closes or you type `:bw lock`. The prompt is a
+separate view of zeteme's own, so the page can't read what you type into it.
+
+Passwords saved in Google Password Manager can be moved over by exporting
+them from passwords.google.com and importing the file into Bitwarden.
 
 ## Extensions
 

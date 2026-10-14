@@ -119,6 +119,7 @@
       case "close": send("close"); break;
       case "q": case "quit": send("quit"); break;
       case "set": case "settings": send("settings"); break;
+      case "bw": case "bitwarden": send(arg === "lock" ? "bitwarden lock" : "bitwarden"); break;
       case "ext": case "extension": send(`ext ${arg}`); break;
       case "back": history.back(); break;
       case "forward": history.forward(); break;
@@ -244,6 +245,8 @@
     O: () => openBar(":", "tabopen "),
     "C-d": () => scroll(0, half()),
     "C-u": () => scroll(0, -half()),
+    // Ctrl-Shift-L, Bitwarden's own fill shortcut.
+    "C-L": () => send("bitwarden"),
     "+": () => send("zoom-in"),
     "-": () => send("zoom-out"),
     "=": () => send("zoom-reset"),
@@ -287,6 +290,7 @@
     if (barMode) { onBarKey(e); return; }
     if (hints) { onHintKey(e); return; }
     const field = activeField();
+    if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === "L") { consume(e); run("C-L"); return; }
     if (insertEl && insertEl === field && isEditable(field)) {
       // Insert mode: only Escape is ours, to leave the field.
       if (e.key === "Escape") { consume(e); insertEl = null; field.blur(); }
@@ -350,6 +354,39 @@
     window.focus();
     bindings[seq]();
   });
+
+  // Called by zeteme with a login from Bitwarden: fills the form's username
+  // and password fields, as the page would see them typed.
+  const isUserField = (el) => ["text", "email", "tel", ""].includes((el.getAttribute("type") || "").toLowerCase());
+  function setValue(el, value) {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  window.zetemeFill = (user, pass) => {
+    const fields = [...document.querySelectorAll("input")].filter((el) =>
+      el.getClientRects().length && !el.disabled && !el.readOnly && el.type !== "hidden");
+    const focused = activeField();
+    const inForm = focused && focused.form;
+    const passEl = (focused && focused.type === "password" && focused) ||
+      fields.find((el) => el.type === "password" && inForm && el.form === inForm) ||
+      fields.find((el) => el.type === "password");
+    let userEl = null;
+    if (passEl) {
+      userEl = fields.slice(0, fields.indexOf(passEl)).filter(isUserField).pop();
+    } else if (focused && fields.includes(focused) && isUserField(focused)) {
+      userEl = focused;
+    } else {
+      // A sign-in that asks for the username first.
+      userEl = fields.find((el) => isUserField(el) && /user|mail|login|account|name/i.test(
+        `${el.name} ${el.id} ${el.autocomplete}`)) || fields.find(isUserField);
+    }
+    if (!userEl && !passEl) { flash("No login form here"); return; }
+    if (userEl && user) setValue(userEl, user);
+    if (passEl) setValue(passEl, pass);
+    (passEl || userEl).focus();
+  };
+  window.zetemeFlash = flash;
 
   // Fullscreen video only fills the webview; ask for the window to follow.
   document.addEventListener("fullscreenchange", () => {

@@ -46,6 +46,15 @@
   </div>
 </section>
 <section>
+  <h2>Passwords</h2>
+  <label><input type="checkbox" id="save_passwords" {{save_passwords}}>
+    Offer to save passwords and fill them in</label>
+  <p class="note">Saved passwords stay on this computer. For Bitwarden, install the
+    <a href="https://bitwarden.com/help/cli/">Bitwarden CLI</a>, run <code>bw login</code>
+    once, then press <code>Ctrl-Shift-L</code> (or <code>:bw</code>) on a login page.
+    <code>:bw lock</code> locks it again.</p>
+</section>
+<section>
   <h2>Tabs</h2>
   <label>Show the tab bar
     <select id="tabs_show">
@@ -83,6 +92,7 @@
     $(id).value = value;
     $(id).addEventListener("change", (e) => send(`set ${id} ${e.target.value}`));
   }
+  $("save_passwords").addEventListener("change", (e) => send(`set save_passwords ${e.target.checked ? "on" : "off"}`));
   $("check").addEventListener("click", () => send("update-check"));
   $("install").addEventListener("click", () => send("update-install"));
 

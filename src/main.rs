@@ -1,14 +1,17 @@
 // Hide the console window in release builds on Windows.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod bitwarden;
 mod command;
 mod extensions;
+mod json;
 mod settings;
 mod tabbar;
 mod update;
 
 use std::{borrow::Cow, fs, path::PathBuf, thread, time::Duration};
 
+use bitwarden::Login;
 use command::{Command, normalize_url, parse_ipc};
 use extensions::{Extension, Index, Page};
 use settings::{SETTINGS_URL, Settings, js_string};
@@ -33,6 +36,8 @@ const BACKGROUND: (u8, u8, u8, u8) = (30, 30, 30, 255);
 
 /// Injected into every page; handles the vim keybindings, hints and command bar.
 const KEYS_JS: &str = include_str!("keys.js");
+/// The Bitwarden password prompt and login chooser.
+const PROMPT_HTML: &str = include_str!("prompt.html");
 
 enum UserEvent {
     Command(Command),
@@ -49,6 +54,19 @@ enum UserEvent {
     ExtensionAdded(PathBuf, Result<String, String>),
     ExtensionRemoved(String, Result<(), String>),
     ExtensionEnabled(Result<(), String>),
+    BitwardenLogins(u64, String, Result<Vec<Login>, bitwarden::Error>),
+    BitwardenUnlocked(Result<String, bitwarden::Error>),
+    Flash(u64, String),
+    PromptUnlock(String),
+    PromptPick(usize),
+    PromptCancel,
+}
+
+/// What a Bitwarden prompt is for: the tab and page it fills.
+struct Pending {
+    tab: u64,
+    url: String,
+    logins: Vec<Login>,
 }
 
 struct Tab {
@@ -82,6 +100,10 @@ struct Browser {
     extensions_dir: PathBuf,
     /// What the settings page says about the last extension change.
     extension_status: String,
+    /// The unlocked Bitwarden session key, kept only while zeteme runs.
+    bitwarden_session: Option<String>,
+    pending: Option<Pending>,
+    prompt: Option<WebView>,
 }
 
 /// Where cookies, logins and the saved session live: `%LOCALAPPDATA%\zeteme`.
@@ -112,6 +134,24 @@ fn with_extensions(builder: WebViewBuilder) -> WebViewBuilder {
     #[cfg(windows)]
     let builder = builder.with_browser_extensions_enabled(true);
     builder
+}
+
+/// Turns WebView2's own password manager on or off for `webview`.
+#[cfg_attr(not(windows), allow(unused_variables))]
+fn set_password_saving(webview: &WebView, on: bool) {
+    #[cfg(windows)]
+    unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
+        use windows_core::Interface;
+        if let Ok(settings) = webview
+            .webview()
+            .Settings()
+            .and_then(|s| s.cast::<ICoreWebView2Settings4>())
+        {
+            let _ = settings.SetIsPasswordAutosaveEnabled(on);
+            let _ = settings.SetIsGeneralAutofillEnabled(true);
+        }
+    }
 }
 
 fn build_tab_bar(
@@ -252,6 +292,7 @@ impl Browser {
                 }
             })
             .build_as_child(&self.window)?;
+        set_password_saving(&webview, self.settings.save_passwords);
 
         self.tabs.push(Tab {
             id,
@@ -264,6 +305,7 @@ impl Browser {
     }
 
     fn select(&mut self, index: usize) {
+        self.close_prompt();
         self.current = index;
         // Show the new tab before hiding the old one, so the window behind
         // them never shows through.
@@ -481,6 +523,195 @@ impl Browser {
         }
     }
 
+    fn flash(&self, tab: u64, text: &str) {
+        if let Some(tab) = self.tabs.iter().find(|t| t.id == tab) {
+            let _ = tab.webview.evaluate_script(&format!(
+                "window.zetemeFlash && zetemeFlash({})",
+                js_string(text)
+            ));
+        }
+    }
+
+    /// Asks Bitwarden for the logins of the current page.
+    fn bitwarden(&mut self) {
+        let tab = &self.tabs[self.current];
+        let (id, url) = (tab.id, tab.webview.url().unwrap_or_default());
+        if !url.starts_with("http") {
+            self.flash(id, "Bitwarden fills web pages only");
+            return;
+        }
+        let session = self.bitwarden_session.clone();
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let result = bitwarden::logins(&url, session.as_deref());
+            let _ = proxy.send_event(UserEvent::BitwardenLogins(id, url, result));
+        });
+    }
+
+    fn bitwarden_logins(
+        &mut self,
+        tab: u64,
+        url: String,
+        result: Result<Vec<Login>, bitwarden::Error>,
+    ) {
+        match result {
+            Ok(logins) if logins.is_empty() => self.flash(tab, "No Bitwarden login for this site"),
+            Ok(mut logins) if logins.len() == 1 => self.fill(tab, &url, logins.remove(0)),
+            Ok(logins) => {
+                let items: Vec<String> = logins
+                    .iter()
+                    .take(9)
+                    .map(|login| match login.username.as_str() {
+                        "" => login.name.clone(),
+                        user => format!("{}  {user}", login.name),
+                    })
+                    .collect();
+                self.pending = Some(Pending { tab, url, logins });
+                self.open_prompt("choose", "Bitwarden: which login?", &items);
+            }
+            Err(bitwarden::Error::Locked) => {
+                self.bitwarden_session = None;
+                self.pending = Some(Pending {
+                    tab,
+                    url,
+                    logins: Vec::new(),
+                });
+                self.open_prompt("password", "Bitwarden master password: ", &[]);
+            }
+            Err(bitwarden::Error::Failed(err)) => self.flash(tab, &format!("Bitwarden: {err}")),
+        }
+    }
+
+    /// Fills `login` into the tab `tab`, if it still shows the page it was
+    /// looked up for.
+    fn fill(&mut self, tab: u64, url: &str, login: Login) {
+        let Some(webview) = self.tabs.iter().find(|t| t.id == tab).map(|t| &t.webview) else {
+            return;
+        };
+        let now = webview.url().unwrap_or_default();
+        if bitwarden::origin(&now) != bitwarden::origin(url) {
+            return;
+        }
+        let _ = webview.evaluate_script(&format!(
+            "window.zetemeFill && zetemeFill({}, {})",
+            js_string(&login.username),
+            js_string(&login.password)
+        ));
+        if login.has_totp {
+            let session = self.bitwarden_session.clone();
+            let proxy = self.proxy.clone();
+            thread::spawn(move || {
+                let text = match bitwarden::totp(&login.id, session.as_deref()) {
+                    Ok(code) if bitwarden::copy(&code) => "Copied the one-time code".to_string(),
+                    Ok(_) => "Could not copy the one-time code".to_string(),
+                    Err(_) => "Could not get the one-time code".to_string(),
+                };
+                let _ = proxy.send_event(UserEvent::Flash(tab, text));
+            });
+        }
+    }
+
+    /// Shows the Bitwarden prompt over the bottom of the window, in a
+    /// webview of its own so the page can't read it.
+    fn open_prompt(&mut self, kind: &str, label: &str, items: &[String]) {
+        self.close_prompt();
+        let items: Vec<String> = items.iter().map(|item| js_string(item)).collect();
+        let data = format!(
+            "{{\"kind\": {}, \"label\": {}, \"items\": [{}]}}",
+            js_string(kind),
+            js_string(label),
+            items.join(", ")
+        );
+        let lines = 1 + items.len() as u32;
+        let size = self.window.inner_size();
+        let height = (((lines * 20 + 4) as f64) * self.window.scale_factor()) as u32;
+        let height = height.min(size.height);
+        let proxy = self.proxy.clone();
+        let prompt = WebViewBuilder::new_with_web_context(&mut self.context)
+            .with_html(PROMPT_HTML.replace("{{prompt}}", &data))
+            .with_bounds(tabbar::rect(0, size.height - height, size.width, height))
+            .with_background_color(BACKGROUND)
+            .with_focused(true)
+            .with_ipc_handler(move |req: Request<String>| {
+                let msg = req.body();
+                let event = if let Some(password) = msg.strip_prefix("unlock ") {
+                    UserEvent::PromptUnlock(password.to_string())
+                } else if let Some(i) = msg.strip_prefix("pick ").and_then(|i| i.parse().ok()) {
+                    UserEvent::PromptPick(i)
+                } else {
+                    UserEvent::PromptCancel
+                };
+                let _ = proxy.send_event(event);
+            });
+        if let Ok(prompt) = with_extensions(prompt).build_as_child(&self.window) {
+            let _ = prompt.focus();
+            self.prompt = Some(prompt);
+        }
+    }
+
+    fn close_prompt(&mut self) {
+        if self.prompt.take().is_some()
+            && let Some(tab) = self.tabs.get(self.current)
+        {
+            let _ = tab.webview.focus();
+        }
+    }
+
+    fn prompt_unlock(&mut self, password: String) {
+        self.close_prompt();
+        let Some(pending) = &self.pending else {
+            return;
+        };
+        self.flash(pending.tab, "Unlocking Bitwarden...");
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let _ = proxy.send_event(UserEvent::BitwardenUnlocked(bitwarden::unlock(&password)));
+        });
+    }
+
+    fn bitwarden_unlocked(&mut self, result: Result<String, bitwarden::Error>) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        match result {
+            Ok(session) => {
+                self.bitwarden_session = Some(session);
+                // Look the logins up again, now that the vault is open.
+                let proxy = self.proxy.clone();
+                let session = self.bitwarden_session.clone();
+                thread::spawn(move || {
+                    let result = bitwarden::logins(&pending.url, session.as_deref());
+                    let _ = proxy.send_event(UserEvent::BitwardenLogins(
+                        pending.tab,
+                        pending.url,
+                        result,
+                    ));
+                });
+            }
+            Err(bitwarden::Error::Locked) => self.flash(pending.tab, "Bitwarden is still locked"),
+            Err(bitwarden::Error::Failed(err)) => {
+                self.flash(pending.tab, &format!("Bitwarden: {err}"))
+            }
+        }
+    }
+
+    fn prompt_pick(&mut self, index: usize) {
+        self.close_prompt();
+        if let Some(mut pending) = self.pending.take()
+            && index < pending.logins.len()
+        {
+            let login = pending.logins.swap_remove(index);
+            self.fill(pending.tab, &pending.url, login);
+        }
+    }
+
+    fn bitwarden_lock(&mut self) {
+        self.bitwarden_session = None;
+        let tab = self.tabs[self.current].id;
+        self.flash(tab, "Bitwarden locked");
+        thread::spawn(bitwarden::lock);
+    }
+
     /// `:ext <name>`: the popup (or else options) of the first extension
     /// whose name contains `name`; the extension list without one.
     fn open_extension(&mut self, name: &str) {
@@ -568,6 +799,15 @@ impl Browser {
                 self.settings.check_updates = on;
                 self.settings.save(&self.settings_file);
             }
+            Command::SetSavePasswords(on) => {
+                self.settings.save_passwords = on;
+                self.settings.save(&self.settings_file);
+                for tab in &self.tabs {
+                    set_password_saving(&tab.webview, on);
+                }
+            }
+            Command::Bitwarden => self.bitwarden(),
+            Command::BitwardenLock => self.bitwarden_lock(),
             Command::SetTabsShow(show) => {
                 self.settings.tabs_show = show;
                 self.settings.save(&self.settings_file);
@@ -654,6 +894,9 @@ fn main() -> wry::Result<()> {
         extension_index: Index::load(&extensions_dir),
         extensions_dir,
         extension_status: String::new(),
+        bitwarden_session: None,
+        pending: None,
+        prompt: None,
     };
     for url in &urls {
         browser.open_tab(url)?;
@@ -775,6 +1018,31 @@ fn main() -> wry::Result<()> {
                     browser.set_extension_status(format!("Could not switch it: {err}"));
                 }
                 browser.refresh_extensions();
+                true
+            }
+            Event::UserEvent(UserEvent::BitwardenLogins(tab, url, result)) => {
+                browser.bitwarden_logins(tab, url, result);
+                true
+            }
+            Event::UserEvent(UserEvent::BitwardenUnlocked(result)) => {
+                browser.bitwarden_unlocked(result);
+                true
+            }
+            Event::UserEvent(UserEvent::Flash(tab, text)) => {
+                browser.flash(tab, &text);
+                true
+            }
+            Event::UserEvent(UserEvent::PromptUnlock(password)) => {
+                browser.prompt_unlock(password);
+                true
+            }
+            Event::UserEvent(UserEvent::PromptPick(index)) => {
+                browser.prompt_pick(index);
+                true
+            }
+            Event::UserEvent(UserEvent::PromptCancel) => {
+                browser.pending = None;
+                browser.close_prompt();
                 true
             }
             Event::UserEvent(UserEvent::Title(id, title)) => {

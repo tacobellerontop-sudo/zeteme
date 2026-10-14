@@ -22,10 +22,14 @@ pub enum Command {
     Settings,
     SettingsReady,
     SetCheckUpdates(bool),
+    SetSavePasswords(bool),
     SetTabsShow(Show),
     SetTabsPosition(Position),
     CheckUpdate,
     InstallUpdate,
+    /// Fills the page's login form from Bitwarden.
+    Bitwarden,
+    BitwardenLock,
     /// Opens the popup of the extension whose name contains this.
     Extension(String),
     ExtensionInstall(String),
@@ -43,6 +47,7 @@ impl Command {
             self,
             Command::SettingsReady
                 | Command::SetCheckUpdates(_)
+                | Command::SetSavePasswords(_)
                 | Command::SetTabsShow(_)
                 | Command::SetTabsPosition(_)
                 | Command::CheckUpdate
@@ -75,12 +80,16 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
         "set" => match arg.split_once(' ').unwrap_or((arg, "")) {
             ("check_updates", "on") => Command::SetCheckUpdates(true),
             ("check_updates", "off") => Command::SetCheckUpdates(false),
+            ("save_passwords", "on") => Command::SetSavePasswords(true),
+            ("save_passwords", "off") => Command::SetSavePasswords(false),
             ("tabs_show", value) => Command::SetTabsShow(Show::parse(value)?),
             ("tabs_position", value) => Command::SetTabsPosition(Position::parse(value)?),
             _ => return None,
         },
         "update-check" => Command::CheckUpdate,
         "update-install" => Command::InstallUpdate,
+        "bitwarden" if arg == "lock" => Command::BitwardenLock,
+        "bitwarden" if arg.is_empty() => Command::Bitwarden,
         "ext" => Command::Extension(arg.to_string()),
         "ext-install" if !arg.is_empty() => Command::ExtensionInstall(arg.to_string()),
         "ext-remove" if !arg.is_empty() => Command::ExtensionRemove(arg.to_string()),
@@ -232,6 +241,11 @@ mod tests {
         assert_eq!(parse_ipc("ext-page abc toolbar"), None);
         assert!(parse_ipc("ext-remove abc").unwrap().settings_only());
         assert!(!parse_ipc("ext bitwarden").unwrap().settings_only());
+        assert_eq!(parse_ipc("bitwarden"), Some(Command::Bitwarden));
+        assert_eq!(parse_ipc("bitwarden lock"), Some(Command::BitwardenLock));
+        assert_eq!(parse_ipc("bitwarden bogus"), None);
+        assert!(!Command::Bitwarden.settings_only());
+        assert!(parse_ipc("set save_passwords off").unwrap().settings_only());
         assert_eq!(parse_ipc("open "), None);
         assert_eq!(parse_ipc("bogus"), None);
     }
