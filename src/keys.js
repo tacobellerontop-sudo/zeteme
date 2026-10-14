@@ -248,8 +248,29 @@
     O: () => openBar(":", "tabopen "),
     "C-d": () => scroll(0, half()),
     "C-u": () => scroll(0, -half()),
-    // Ctrl-Shift-L, Bitwarden's own fill shortcut.
-    "C-L": () => send("bitwarden"),
+    // The usual browser shortcuts; they work in text fields too.
+    // Ctrl-Shift-L is Bitwarden's own fill shortcut.
+    "C-S-l": () => send("bitwarden"),
+    "C-w": () => send("close"),
+    "C-t": () => send("tabopen "),
+    "C-S-t": () => send("undo"),
+    "C-Tab": () => send("tab-next"),
+    "C-S-Tab": () => send("tab-prev"),
+    "C-PageDown": () => send("tab-next"),
+    "C-PageUp": () => send("tab-prev"),
+    "C-l": () => openBar(":", `open ${location.href}`),
+    "C-f": () => openBar("/"),
+    "C-r": () => location.reload(),
+    F5: () => location.reload(),
+    "A-ArrowLeft": () => history.back(),
+    "A-ArrowRight": () => history.forward(),
+    "C-h": () => send("history"),
+    "C-j": () => send("downloads"),
+    "C-=": () => send("zoom-in"),
+    "C-+": () => send("zoom-in"),
+    "C--": () => send("zoom-out"),
+    "C-0": () => send("zoom-reset"),
+    ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`C-${n}`, () => send(`tab-select ${n}`)])),
     "+": () => send("zoom-in"),
     "-": () => send("zoom-out"),
     "=": () => send("zoom-reset"),
@@ -275,7 +296,14 @@
       if (isEditable(field)) insertEl = field;
     },
   };
-  const prefixes = new Set(Object.keys(bindings).filter((k) => k.length === 2).map((k) => k[0]));
+  const GLOBAL = new Set(["C-S-l", "C-w", "C-t", "C-S-t", "C-Tab", "C-S-Tab", "C-PageDown", "C-PageUp",
+    "C-l", "C-f", "C-r", "F5", "A-ArrowLeft", "A-ArrowRight", "C-h", "C-j", "C-=", "C-+", "C--", "C-0",
+    "C-1", "C-2", "C-3", "C-4", "C-5", "C-6", "C-7", "C-8", "C-9"]);
+  // A key with its modifiers, as GLOBAL names it: "C-S-t", "A-ArrowLeft".
+  const combo = (e) => `${e.ctrlKey ? "C-" : ""}${e.altKey ? "A-" : ""}` +
+    `${e.shiftKey && (e.key.length > 1 || /[a-z]/i.test(e.key)) ? "S-" : ""}` +
+    (e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  const prefixes = new Set(Object.keys(bindings).filter((k) => k.length === 2 && !GLOBAL.has(k)).map((k) => k[0]));
 
   function consume(e) {
     e.preventDefault();
@@ -293,7 +321,8 @@
     if (barMode) { onBarKey(e); return; }
     if (hints) { onHintKey(e); return; }
     const field = activeField();
-    if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === "L") { consume(e); run("C-L"); return; }
+    const name = combo(e);
+    if (GLOBAL.has(name)) { consume(e); run(name); return; }
     if (insertEl && insertEl === field && isEditable(field)) {
       // Insert mode: only Escape is ours, to leave the field.
       if (e.key === "Escape") { consume(e); insertEl = null; field.blur(); }

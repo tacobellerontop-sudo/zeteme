@@ -18,6 +18,8 @@ pub enum Command {
     Undo,
     NextTab,
     PrevTab,
+    /// Selects the nth tab, counting from 1; 9 is the last one.
+    SelectTab(usize),
     ZoomIn,
     ZoomOut,
     ZoomReset,
@@ -132,6 +134,7 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
         "undo" => Command::Undo,
         "tab-next" => Command::NextTab,
         "tab-prev" => Command::PrevTab,
+        "tab-select" => Command::SelectTab(arg.parse().ok().filter(|&n| n > 0)?),
         "zoom-in" => Command::ZoomIn,
         "zoom-out" => Command::ZoomOut,
         "zoom-reset" => Command::ZoomReset,
@@ -341,6 +344,8 @@ mod tests {
         assert!(!Command::Bitwarden.internal_only());
         assert!(parse_ipc("set save_passwords off").unwrap().internal_only());
         assert_eq!(parse_ipc("open "), None);
+        assert_eq!(parse_ipc("tab-select 3"), Some(Command::SelectTab(3)));
+        assert_eq!(parse_ipc("tab-select 0"), None);
         assert_eq!(parse_ipc("history"), Some(Command::History));
         assert!(!Command::History.internal_only());
         assert_eq!(

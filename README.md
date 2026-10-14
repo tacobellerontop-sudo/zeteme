@@ -67,7 +67,9 @@ zeteme has no toolbar and only a pop-up tab bar; everything is done from the key
 modeled on qutebrowser. Clicking or tabbing into a text field puts you in
 insert mode, where keys go to the page until you press `Esc`. A field the page
 focuses by itself (a search box on load, say) doesn't: click it or press `i`.
-Keys work the same when an embedded player or other frame has focus.
+Keys work the same when an embedded player or other frame has focus. The
+usual Ctrl shortcuts (`Ctrl-T`, `Ctrl-W` and so on, below) work in text
+fields as well.
 
 | Key | Action |
 | --- | --- |
@@ -88,6 +90,13 @@ Keys work the same when an embedded player or other frame has focus.
 | `gi` | Focus the first text field |
 | `i` | Type into the field the page focused |
 | `Ctrl-Shift-L` | Fill the login form from Bitwarden |
+| `Ctrl-T` / `Ctrl-W` / `Ctrl-Shift-T` | New tab / close tab / reopen closed tab |
+| `Ctrl-Tab` / `Ctrl-Shift-Tab` (or `Ctrl-PgDn` / `Ctrl-PgUp`) | Next / previous tab |
+| `Ctrl-1` ... `Ctrl-8` / `Ctrl-9` | Go to that tab / the last tab |
+| `Ctrl-L` / `Ctrl-F` / `Ctrl-R` (or `F5`) | Edit the URL / find / reload |
+| `Alt-Left` / `Alt-Right` | Back / forward |
+| `Ctrl-+` / `Ctrl--` / `Ctrl-0` | Zoom in / out / reset |
+| `Ctrl-H` / `Ctrl-J` | History / downloads |
 | `:` | Command bar |
 | `Esc` | Leave insert mode, close the command bar or cancel hints |
 

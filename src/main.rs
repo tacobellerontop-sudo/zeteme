@@ -1176,6 +1176,10 @@ impl Browser {
             }
             Command::NextTab => self.select((self.current + 1) % self.tabs.len()),
             Command::PrevTab => self.select((self.current + self.tabs.len() - 1) % self.tabs.len()),
+            Command::SelectTab(n) => {
+                let last = self.tabs.len() - 1;
+                self.select(if n == 9 { last } else { (n - 1).min(last) });
+            }
             Command::ZoomIn => self.set_zoom(self.tabs[self.current].zoom + ZOOM_STEP),
             Command::ZoomOut => self.set_zoom(self.tabs[self.current].zoom - ZOOM_STEP),
             Command::ZoomReset => self.set_zoom(1.0),
