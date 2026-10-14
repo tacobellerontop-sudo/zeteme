@@ -37,6 +37,19 @@
 <body>
 <h1>zeteme settings</h1>
 <section>
+  <h2>Startup</h2>
+  <label>Start page
+    <select id="start_page">
+      <option value="zeteme">zeteme start page</option>
+      <option value="duckduckgo">DuckDuckGo</option>
+      <option value="blank">blank page</option>
+    </select></label>
+  <label><input type="checkbox" id="restore_tabs" {{restore_tabs}}>
+    Reopen the tabs from last time</label>
+  <p class="note">The start page opens when zeteme starts with no tabs to reopen,
+    and in new tabs (<code>O</code> then Enter, or <code>:tabopen</code>).</p>
+</section>
+<section>
   <h2>Updates</h2>
   <p>You are running zeteme <code>{{version}}</code>.</p>
   <label><input type="checkbox" id="auto" {{check_updates}}>
@@ -89,10 +102,11 @@
   const $ = (id) => document.getElementById(id);
 
   $("auto").addEventListener("change", (e) => send(`set check_updates ${e.target.checked ? "on" : "off"}`));
-  for (const [id, value] of [["tabs_show", "{{tabs_show}}"], ["tabs_position", "{{tabs_position}}"]]) {
+  for (const [id, value] of [["tabs_show", "{{tabs_show}}"], ["tabs_position", "{{tabs_position}}"], ["start_page", "{{start_page}}"]]) {
     $(id).value = value;
     $(id).addEventListener("change", (e) => send(`set ${id} ${e.target.value}`));
   }
+  $("restore_tabs").addEventListener("change", (e) => send(`set restore_tabs ${e.target.checked ? "on" : "off"}`));
   $("save_passwords").addEventListener("change", (e) => send(`set save_passwords ${e.target.checked ? "on" : "off"}`));
   $("check").addEventListener("click", () => send("update-check"));
   $("install").addEventListener("click", () => send("update-install"));

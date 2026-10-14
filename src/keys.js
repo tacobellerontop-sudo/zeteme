@@ -115,7 +115,7 @@
     const arg = rest.join(" ");
     switch (cmd) {
       case "o": case "open": if (arg) send(`open ${arg}`); break;
-      case "t": case "tabopen": if (arg) send(`tabopen ${arg}`); break;
+      case "t": case "tabopen": send(`tabopen ${arg}`); break;
       case "close": send("close"); break;
       case "q": case "quit": send("quit"); break;
       case "set": case "settings": send("settings"); break;

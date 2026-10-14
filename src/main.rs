@@ -4,22 +4,36 @@
 mod bitwarden;
 mod command;
 mod extensions;
+mod geometry;
 mod json;
 mod settings;
 mod tabbar;
 mod update;
 
-use std::{borrow::Cow, fs, path::PathBuf, thread, time::Duration};
+use std::{
+    borrow::Cow,
+    fs,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 
 use bitwarden::Login;
 use command::{Command, normalize_url, parse_ipc};
 use extensions::{Extension, Index, Page};
-use settings::{SETTINGS_URL, Settings, js_string};
+use geometry::Geometry;
+use settings::{SETTINGS_URL, START_URL, Settings, js_string};
 use tabbar::{Extent, Show};
 use tao::{
+    dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     window::{Fullscreen, Window, WindowBuilder},
+};
+#[cfg(windows)]
+use tao::{
+    platform::windows::{IconExtWindows, WindowBuilderExtWindows},
+    window::Icon,
 };
 use update::Status;
 use wry::{
@@ -29,7 +43,6 @@ use wry::{
 #[cfg(windows)]
 use wry::{WebViewBuilderExtWindows, WebViewExtWindows};
 
-const DEFAULT_URL: &str = "https://duckduckgo.com";
 const ZOOM_STEP: f64 = 0.1;
 /// What shows before a page has drawn, instead of white: the tab bar's grey.
 const BACKGROUND: (u8, u8, u8, u8) = (30, 30, 30, 255);
@@ -91,6 +104,9 @@ struct Browser {
     closed: Vec<String>,
     next_id: u64,
     session_file: PathBuf,
+    /// Where the window was when last neither maximized nor minimized.
+    geometry: Option<Geometry>,
+    geometry_file: PathBuf,
     settings: Settings,
     settings_file: PathBuf,
     update: Status,
@@ -122,6 +138,23 @@ fn data_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("zeteme")
+}
+
+/// Left by an update, so the restarted zeteme reopens the tabs.
+fn updated_marker(data_dir: &Path) -> PathBuf {
+    data_dir.join("updated")
+}
+
+/// Gives the window the icon zeteme.exe carries (assets/zeteme.rc).
+#[cfg(windows)]
+fn with_icon(builder: WindowBuilder) -> WindowBuilder {
+    let icon = || Icon::from_resource(1, None).ok();
+    builder.with_window_icon(icon()).with_taskbar_icon(icon())
+}
+
+#[cfg(not(windows))]
+fn with_icon(builder: WindowBuilder) -> WindowBuilder {
+    builder
 }
 
 /// Lays out the tab bar and pages in `window`, returning (bar, pages).
@@ -272,8 +305,12 @@ impl Browser {
             .with_bounds(bounds)
             .with_initialization_script(KEYS_JS)
             .with_background_color(BACKGROUND)
-            .with_custom_protocol("zeteme".into(), move |_, _| {
-                let page = settings::page(&Settings::load(&settings_file));
+            .with_custom_protocol("zeteme".into(), move |_, req| {
+                let page = if req.uri().to_string().starts_with(START_URL) {
+                    settings::start_page().to_string()
+                } else {
+                    settings::page(&Settings::load(&settings_file))
+                };
                 Response::builder()
                     .header("Content-Type", "text/html; charset=utf-8")
                     .body(Cow::Owned(page.into_bytes()))
@@ -380,6 +417,30 @@ impl Browser {
             .filter(|url| !url.is_empty())
             .collect();
         let _ = fs::write(&self.session_file, urls.join("\n"));
+    }
+
+    /// Notes where the window is, so it opens there next time.
+    fn track_geometry(&mut self) {
+        if self.fullscreen || self.window.is_minimized() {
+            return;
+        }
+        if self.window.is_maximized() {
+            if let Some(geometry) = &mut self.geometry {
+                geometry.maximized = true;
+            }
+            return;
+        }
+        let Ok(position) = self.window.outer_position() else {
+            return;
+        };
+        let size = self.window.inner_size();
+        self.geometry = Some(Geometry {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            maximized: false,
+        });
     }
 
     fn open_settings(&mut self) {
@@ -898,6 +959,9 @@ impl Browser {
             Command::TabOpen(url) => {
                 let _ = self.open_tab(&url);
             }
+            Command::NewTab => {
+                let _ = self.open_tab(self.settings.start_page.url());
+            }
             Command::Close => return self.close_current(),
             Command::Undo => {
                 if let Some(url) = self.closed.pop() {
@@ -946,6 +1010,14 @@ impl Browser {
                 self.draw_tab_bar();
                 self.layout();
             }
+            Command::SetStartPage(page) => {
+                self.settings.start_page = page;
+                self.settings.save(&self.settings_file);
+            }
+            Command::SetRestoreTabs(on) => {
+                self.settings.restore_tabs = on;
+                self.settings.save(&self.settings_file);
+            }
             Command::CheckUpdate => self.check_for_update(),
             Command::InstallUpdate => self.install_update(),
             Command::Extension(name) => self.open_extension(&name),
@@ -966,30 +1038,53 @@ fn main() -> wry::Result<()> {
     let _ = fs::create_dir_all(&data_dir);
     let session_file = data_dir.join("session.txt");
     let settings_file = data_dir.join("settings.txt");
+    let geometry_file = data_dir.join("window.txt");
     let extensions_dir = data_dir.join("extensions");
     let _ = fs::create_dir_all(&extensions_dir);
     let settings = Settings::load(&settings_file);
 
     // Restore the last session, then open any URL given on the command line.
-    let mut urls: Vec<String> = fs::read_to_string(&session_file)
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(str::to_string)
-        .collect();
+    // After an update the tabs always come back, as if zeteme never closed.
+    let updated = fs::remove_file(updated_marker(&data_dir)).is_ok();
+    let mut urls: Vec<String> = if settings.restore_tabs || updated {
+        fs::read_to_string(&session_file)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    } else {
+        Vec::new()
+    };
     if let Some(arg) = std::env::args().nth(1) {
         urls.push(normalize_url(&arg));
     }
     if urls.is_empty() {
-        urls.push(DEFAULT_URL.to_string());
+        urls.push(settings.start_page.url().to_string());
     }
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    let window = WindowBuilder::new()
+    let mut builder = with_icon(WindowBuilder::new())
         .with_title("zeteme")
-        .with_background_color(BACKGROUND)
-        .build(&event_loop)
-        .expect("failed to create window");
+        .with_background_color(BACKGROUND);
+    // Open as big as, and where, the window was last time.
+    let geometry = Geometry::load(&geometry_file);
+    if let Some(geometry) = geometry {
+        builder = builder
+            .with_inner_size(PhysicalSize::new(geometry.width, geometry.height))
+            .with_maximized(geometry.maximized);
+        let monitors: Vec<_> = event_loop
+            .available_monitors()
+            .map(|monitor| {
+                let (position, size) = (monitor.position(), monitor.size());
+                (position.x, position.y, size.width, size.height)
+            })
+            .collect();
+        if geometry.reachable(&monitors) {
+            builder = builder.with_position(PhysicalPosition::new(geometry.x, geometry.y));
+        }
+    }
+    let window = builder.build(&event_loop).expect("failed to create window");
 
     let mut context = WebContext::new(Some(data_dir.join("webview")));
     let proxy = event_loop.create_proxy();
@@ -1009,6 +1104,8 @@ fn main() -> wry::Result<()> {
         closed: Vec::new(),
         next_id: 0,
         session_file,
+        geometry,
+        geometry_file,
         settings,
         settings_file,
         update: Status::Idle,
@@ -1027,6 +1124,7 @@ fn main() -> wry::Result<()> {
         pending: None,
         prompt: None,
     };
+    browser.track_geometry();
     for url in &urls {
         browser.open_tab(url)?;
     }
@@ -1048,6 +1146,14 @@ fn main() -> wry::Result<()> {
                 ..
             } => {
                 browser.layout();
+                browser.track_geometry();
+                true
+            }
+            Event::WindowEvent {
+                event: WindowEvent::Moved(_),
+                ..
+            } => {
+                browser.track_geometry();
                 true
             }
             Event::WindowEvent {
@@ -1089,7 +1195,10 @@ fn main() -> wry::Result<()> {
                 // The installer replaces zeteme once it has exited, then
                 // starts it again; the session is saved on the way out.
                 match update::install(&installer) {
-                    Ok(()) => false,
+                    Ok(()) => {
+                        let _ = fs::write(updated_marker(&data_dir), "");
+                        false
+                    }
                     Err(err) => {
                         browser.set_update(Status::Failed(err));
                         true
@@ -1192,6 +1301,9 @@ fn main() -> wry::Result<()> {
 
         if !keep_running {
             browser.save_session();
+            if let Some(geometry) = &browser.geometry {
+                geometry.save(&browser.geometry_file);
+            }
             *control_flow = ControlFlow::Exit;
         }
     });

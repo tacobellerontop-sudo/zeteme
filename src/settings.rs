@@ -10,12 +10,55 @@ use crate::{
 };
 
 const PAGE_HTML: &str = include_str!("settings.html");
+const START_HTML: &str = include_str!("start.html");
 
 /// The URL wry serves the `zeteme` custom protocol under.
 #[cfg(windows)]
 pub const SETTINGS_URL: &str = "http://zeteme.settings/";
 #[cfg(not(windows))]
 pub const SETTINGS_URL: &str = "zeteme://settings/";
+
+/// zeteme's own start page, served the same way.
+#[cfg(windows)]
+pub const START_URL: &str = "http://zeteme.start/";
+#[cfg(not(windows))]
+pub const START_URL: &str = "zeteme://start/";
+
+/// What zeteme opens when it starts with no tabs to restore, and in new tabs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StartPage {
+    /// zeteme's own page: a search box and the main keys.
+    Zeteme,
+    Blank,
+    DuckDuckGo,
+}
+
+impl StartPage {
+    pub fn parse(text: &str) -> Option<StartPage> {
+        match text {
+            "zeteme" => Some(StartPage::Zeteme),
+            "blank" => Some(StartPage::Blank),
+            "duckduckgo" => Some(StartPage::DuckDuckGo),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StartPage::Zeteme => "zeteme",
+            StartPage::Blank => "blank",
+            StartPage::DuckDuckGo => "duckduckgo",
+        }
+    }
+
+    pub fn url(self) -> &'static str {
+        match self {
+            StartPage::Zeteme => START_URL,
+            StartPage::Blank => "about:blank",
+            StartPage::DuckDuckGo => "https://duckduckgo.com/",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -24,6 +67,9 @@ pub struct Settings {
     pub save_passwords: bool,
     pub tabs_show: Show,
     pub tabs_position: Position,
+    pub start_page: StartPage,
+    /// Reopen the tabs that were open when zeteme last closed.
+    pub restore_tabs: bool,
 }
 
 impl Default for Settings {
@@ -33,6 +79,8 @@ impl Default for Settings {
             save_passwords: true,
             tabs_show: Show::Auto,
             tabs_position: Position::Top,
+            start_page: StartPage::Zeteme,
+            restore_tabs: true,
         }
     }
 }
@@ -59,6 +107,10 @@ impl Settings {
                     settings.tabs_position =
                         Position::parse(value).unwrap_or(settings.tabs_position)
                 }
+                "start_page" => {
+                    settings.start_page = StartPage::parse(value).unwrap_or(settings.start_page)
+                }
+                "restore_tabs" => settings.restore_tabs = value != "false",
                 _ => {}
             }
         }
@@ -69,11 +121,14 @@ impl Settings {
         let _ = fs::write(
             file,
             format!(
-                "check_updates={}\nsave_passwords={}\ntabs_show={}\ntabs_position={}\n",
+                "check_updates={}\nsave_passwords={}\ntabs_show={}\ntabs_position={}\n\
+                 start_page={}\nrestore_tabs={}\n",
                 self.check_updates,
                 self.save_passwords,
                 self.tabs_show.as_str(),
-                self.tabs_position.as_str()
+                self.tabs_position.as_str(),
+                self.start_page.as_str(),
+                self.restore_tabs
             ),
         );
     }
@@ -101,6 +156,16 @@ pub fn page(settings: &Settings) -> String {
         )
         .replace("{{tabs_show}}", settings.tabs_show.as_str())
         .replace("{{tabs_position}}", settings.tabs_position.as_str())
+        .replace("{{start_page}}", settings.start_page.as_str())
+        .replace(
+            "{{restore_tabs}}",
+            if settings.restore_tabs { "checked" } else { "" },
+        )
+}
+
+/// zeteme's start page.
+pub fn start_page() -> &'static str {
+    START_HTML
 }
 
 /// A script that shows `status` on an open settings page.
@@ -183,6 +248,29 @@ mod tests {
         assert_eq!(tabs.tabs_show, Show::Never);
         assert_eq!(tabs.tabs_position, Position::Left);
         assert_eq!(Settings::parse("tabs_show=bogus").tabs_show, Show::Auto);
+        assert_eq!(Settings::parse("").start_page, StartPage::Zeteme);
+        assert_eq!(
+            Settings::parse("start_page=blank").start_page,
+            StartPage::Blank
+        );
+        assert!(Settings::parse("").restore_tabs);
+        assert!(!Settings::parse("restore_tabs=false").restore_tabs);
+    }
+
+    #[test]
+    fn saves_and_loads() {
+        let settings = Settings {
+            check_updates: false,
+            tabs_show: Show::Hover,
+            start_page: StartPage::DuckDuckGo,
+            restore_tabs: false,
+            ..Settings::default()
+        };
+        let file = std::env::temp_dir().join(format!("zeteme-test-{}.txt", std::process::id()));
+        settings.save(&file);
+        let loaded = Settings::load(&file);
+        let _ = fs::remove_file(&file);
+        assert_eq!(loaded, settings);
     }
 
     #[test]

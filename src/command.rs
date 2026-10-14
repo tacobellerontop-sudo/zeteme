@@ -2,6 +2,7 @@
 
 use crate::{
     extensions::Page,
+    settings::StartPage,
     tabbar::{Position, Show},
 };
 
@@ -11,6 +12,8 @@ const SEARCH_URL: &str = "https://duckduckgo.com/?q=";
 pub enum Command {
     Open(String),
     TabOpen(String),
+    /// Opens the start page in a new tab.
+    NewTab,
     Close,
     Undo,
     NextTab,
@@ -25,6 +28,8 @@ pub enum Command {
     SetSavePasswords(bool),
     SetTabsShow(Show),
     SetTabsPosition(Position),
+    SetStartPage(StartPage),
+    SetRestoreTabs(bool),
     CheckUpdate,
     InstallUpdate,
     /// Fills the page's login form from Bitwarden.
@@ -52,6 +57,8 @@ impl Command {
                 | Command::SetSavePasswords(_)
                 | Command::SetTabsShow(_)
                 | Command::SetTabsPosition(_)
+                | Command::SetStartPage(_)
+                | Command::SetRestoreTabs(_)
                 | Command::CheckUpdate
                 | Command::InstallUpdate
                 | Command::ExtensionInstall(_)
@@ -69,6 +76,7 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
     let command = match name {
         "open" if !arg.is_empty() => Command::Open(normalize_url(arg)),
         "tabopen" if !arg.is_empty() => Command::TabOpen(normalize_url(arg)),
+        "tabopen" => Command::NewTab,
         "close" => Command::Close,
         "undo" => Command::Undo,
         "tab-next" => Command::NextTab,
@@ -86,6 +94,9 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
             ("save_passwords", "off") => Command::SetSavePasswords(false),
             ("tabs_show", value) => Command::SetTabsShow(Show::parse(value)?),
             ("tabs_position", value) => Command::SetTabsPosition(Position::parse(value)?),
+            ("start_page", value) => Command::SetStartPage(StartPage::parse(value)?),
+            ("restore_tabs", "on") => Command::SetRestoreTabs(true),
+            ("restore_tabs", "off") => Command::SetRestoreTabs(false),
             _ => return None,
         },
         "update-check" => Command::CheckUpdate,
@@ -201,6 +212,16 @@ mod tests {
         assert_eq!(
             parse_ipc("tabopen rust"),
             Some(Command::TabOpen("https://duckduckgo.com/?q=rust".into()))
+        );
+        assert_eq!(parse_ipc("tabopen "), Some(Command::NewTab));
+        assert_eq!(
+            parse_ipc("set start_page blank"),
+            Some(Command::SetStartPage(StartPage::Blank))
+        );
+        assert_eq!(parse_ipc("set start_page bogus"), None);
+        assert_eq!(
+            parse_ipc("set restore_tabs off"),
+            Some(Command::SetRestoreTabs(false))
         );
         assert_eq!(parse_ipc("close"), Some(Command::Close));
         assert_eq!(parse_ipc("quit"), Some(Command::Quit));

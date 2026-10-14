@@ -92,11 +92,19 @@ Keys work the same when an embedded player or other frame has focus.
 | `:` | Command bar |
 | `Esc` | Leave insert mode, close the command bar or cancel hints |
 
-Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`), `:close`,
+Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`; on its own it opens the start page), `:close`,
 `:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:ext <name>`,
 `:bw` / `:bw fill` / `:bw lock`, `:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
+
+## Start page
+
+When zeteme starts it reopens the tabs from last time. With none to reopen,
+and in a new tab (`O` then `Enter`, or `:tabopen`), it shows its start page:
+a search box and the main keys. In `:settings` the start page can be
+DuckDuckGo or a blank page instead, and reopening tabs can be turned off so
+zeteme always starts on it.
 
 ## Tabs
 
@@ -154,5 +162,6 @@ removes them.
 
 ## Data
 
-Cookies, logins, settings, extensions and the open tabs are kept in `%LOCALAPPDATA%\zeteme`, so
-zeteme reopens where you left off. Downloads go to your Downloads folder.
+Cookies, logins, settings, extensions, the open tabs and the window's size
+and place are kept in `%LOCALAPPDATA%\zeteme`, so zeteme reopens where you
+left off. Downloads go to your Downloads folder.

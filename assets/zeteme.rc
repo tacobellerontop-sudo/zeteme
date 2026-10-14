@@ -1,0 +1,2 @@
+// zeteme.exe's icon; main.rs loads it for the window by this number.
+1 ICON "zeteme.ico"
