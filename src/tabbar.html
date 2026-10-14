@@ -7,36 +7,110 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e1e; }
   body { display: flex; font: 12px/22px "Segoe UI", sans-serif; color: #aaa;
          user-select: none; cursor: default; }
-  body.vertical { flex-direction: column; overflow-y: auto; }
-  div { flex: 1 1 0; min-width: 0; max-width: 240px; padding: 0 8px;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        border-right: 1px solid #333; }
-  .vertical div { flex: none; max-width: none; border-right: 0; border-bottom: 1px solid #333; }
-  div:hover { background: #2a2a2a; }
-  div.current { background: #3a3a3a; color: #fff; }
+  #tabs { flex: 1 1 0; min-width: 0; display: flex; overflow: hidden; }
+  .vertical, .vertical #tabs { flex-direction: column; }
+  .vertical #tabs { overflow-y: auto; }
+  .tab { flex: 1 1 0; min-width: 0; max-width: 240px; padding: 0 8px;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+         border-right: 1px solid #333; }
+  .vertical .tab { flex: none; max-width: none; border-right: 0; border-bottom: 1px solid #333; }
+  .tab:hover { background: #2a2a2a; }
+  .tab.current { background: #3a3a3a; color: #fff; }
   b { font-weight: normal; color: #777; margin-right: 6px; }
   .current b { color: #bbb; }
+  /* The pinned buttons, at the end of the bar. */
+  #buttons { flex: none; display: flex; }
+  #buttons:not(:empty) { border-left: 1px solid #333; }
+  .vertical #buttons:not(:empty) { border-left: 0; border-top: 1px solid #333; }
+  .button { position: relative; width: 28px; height: 22px; display: flex;
+            align-items: center; justify-content: center; color: #999; }
+  .button:hover { background: #2a2a2a; color: #fff; }
+  .button svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
+                stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .button i { position: absolute; left: 4px; right: 4px; bottom: 2px; height: 2px;
+              background: #50dcaa; transform-origin: left; display: none; }
+  .button.going i { display: block; }
+  .button.unknown i { animation: pulse 1s ease-in-out infinite alternate; }
+  .button.going, .button.unseen { color: #50dcaa; }
+  .button span { position: absolute; top: 0; right: 2px; font: 9px/11px "Segoe UI", sans-serif;
+                 color: #50dcaa; }
+  @keyframes pulse { from { opacity: 0.3; } to { opacity: 1; } }
 </style>
 </head>
 <body>
+<div id="tabs"></div>
+<div id="buttons"></div>
 <script>
-  // Called by zeteme with every tab's title, the current tab and the layout.
-  window.zetemeTabs = (titles, current, vertical) => {
+  // Drawn here, in zeteme's own view, so innerHTML is safe.
+  const ICONS = {
+    downloads: '<path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13.5h10"/>',
+    history: '<circle cx="8" cy="8" r="5.8"/><path d="M8 4.8V8l2.2 1.6"/>',
+    newtab: '<path d="M8 3v10M3 8h10"/>',
+    bitwarden: '<path d="M8 1.8 13 3.6v4.2c0 3-2.2 5.2-5 6.4-2.8-1.2-5-3.4-5-6.4V3.6z"/>',
+    settings: '<circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"/>',
+  };
+  const TITLES = {
+    downloads: "Downloads (:downloads)",
+    history: "History (:history)",
+    newtab: "New tab (O)",
+    bitwarden: "Bitwarden vault (:bw)",
+    settings: "Settings (:settings)",
+  };
+  let shownButtons = "";
+  let downloads = [0, -1, false];
+
+  function drawButtons(names) {
+    if (names.join() === shownButtons) return;
+    shownButtons = names.join();
+    document.getElementById("buttons").replaceChildren(...names.filter((n) => ICONS[n]).map((name) => {
+      const button = document.createElement("div");
+      button.className = "button";
+      button.dataset.name = name;
+      button.title = TITLES[name];
+      button.innerHTML = `<svg viewBox="0 0 16 16">${ICONS[name]}</svg>`;
+      if (name === "downloads") button.append(document.createElement("i"), document.createElement("span"));
+      button.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        window.ipc.postMessage(`button ${name}`);
+      });
+      return button;
+    }));
+    zetemeDownloadButton(...downloads);
+  }
+
+  // Called by zeteme with how many downloads are going, how far along they
+  // are (-1 if unknown) and whether one finished since :downloads was seen.
+  window.zetemeDownloadButton = (going, done, unseen) => {
+    downloads = [going, done, unseen];
+    const button = document.querySelector('.button[data-name="downloads"]');
+    if (!button) return;
+    button.classList.toggle("going", going > 0);
+    button.classList.toggle("unknown", going > 0 && done < 0);
+    button.classList.toggle("unseen", unseen);
+    button.querySelector("i").style.transform = `scaleX(${done < 0 ? 1 : done})`;
+    button.querySelector("span").textContent = going > 1 ? going : "";
+  };
+
+  // Called by zeteme with every tab's title, the current tab, the layout
+  // and the pinned buttons.
+  window.zetemeTabs = (titles, current, vertical, buttons = []) => {
     document.body.className = vertical ? "vertical" : "";
-    document.body.replaceChildren(...titles.map((title, i) => {
+    const tabs = document.getElementById("tabs");
+    tabs.replaceChildren(...titles.map((title, i) => {
       const tab = document.createElement("div");
+      tab.className = i === current ? "tab current" : "tab";
       const number = document.createElement("b");
       number.textContent = i + 1;
       tab.append(number, title || "New tab");
       tab.title = title;
-      if (i === current) tab.className = "current";
       tab.addEventListener("mousedown", (e) => {
         e.preventDefault();
         window.ipc.postMessage(`select ${i}`);
       });
       return tab;
     }));
-    const tab = document.body.children[current];
+    drawButtons(buttons);
+    const tab = tabs.children[current];
     if (tab) tab.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
   // In "on hover" mode zeteme leaves a strip of the bar at the window's

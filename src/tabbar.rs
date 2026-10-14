@@ -38,6 +38,59 @@ pub enum Position {
     Right,
 }
 
+/// A button that can be pinned at the end of the tab bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Button {
+    Downloads,
+    History,
+    NewTab,
+    Bitwarden,
+    Settings,
+}
+
+impl Button {
+    pub const ALL: [Button; 5] = [
+        Button::Downloads,
+        Button::History,
+        Button::NewTab,
+        Button::Bitwarden,
+        Button::Settings,
+    ];
+
+    pub fn parse(text: &str) -> Option<Button> {
+        Button::ALL.into_iter().find(|b| b.as_str() == text)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Button::Downloads => "downloads",
+            Button::History => "history",
+            Button::NewTab => "newtab",
+            Button::Bitwarden => "bitwarden",
+            Button::Settings => "settings",
+        }
+    }
+
+    /// Reads a comma-separated list, skipping names it doesn't know.
+    pub fn parse_list(text: &str) -> Vec<Button> {
+        let mut buttons = Vec::new();
+        for button in text
+            .split(',')
+            .filter_map(|name| Button::parse(name.trim()))
+        {
+            if !buttons.contains(&button) {
+                buttons.push(button);
+            }
+        }
+        buttons
+    }
+
+    pub fn list_str(buttons: &[Button]) -> String {
+        let names: Vec<&str> = buttons.iter().map(|b| b.as_str()).collect();
+        names.join(",")
+    }
+}
+
 impl Show {
     pub fn parse(text: &str) -> Option<Show> {
         match text {
@@ -235,5 +288,16 @@ mod tests {
             assert_eq!(Position::parse(position.as_str()), Some(position));
         }
         assert_eq!(Position::parse("middle"), None);
+        for button in Button::ALL {
+            assert_eq!(Button::parse(button.as_str()), Some(button));
+        }
+        assert_eq!(
+            Button::parse_list(" history, newtab,history,x"),
+            vec![Button::History, Button::NewTab]
+        );
+        assert_eq!(
+            Button::list_str(&Button::parse_list("settings,downloads")),
+            "settings,downloads"
+        );
     }
 }

@@ -122,6 +122,8 @@
       case "bw": case "bitwarden":
         send({ lock: "bitwarden lock", fill: "bitwarden" }[arg] || "bitwarden vault"); break;
       case "ext": case "extension": send(`ext ${arg}`); break;
+      case "history": send("history"); break;
+      case "dl": case "downloads": send("downloads"); break;
       case "back": history.back(); break;
       case "forward": history.forward(); break;
       case "r": case "reload": location.reload(); break;

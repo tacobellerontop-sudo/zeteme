@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>History</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 32px 40px; background: #1e1e1e; color: #ddd;
+         font: 14px/1.5 "Segoe UI", sans-serif; }
+  main { max-width: 860px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 auto 0 0; }
+  input { font: inherit; color: #fff; background: #2a2a2a; border: 1px solid #444;
+          border-radius: 3px; padding: 4px 10px; width: 320px; outline: none; }
+  input:focus { border-color: #50dcaa; }
+  button { font: inherit; color: #fff; background: #333; border: 1px solid #555;
+           border-radius: 3px; padding: 3px 12px; cursor: pointer; }
+  button:hover { background: #3c3c3c; }
+  h2 { font-size: 13px; font-weight: 600; color: #888; margin: 20px 0 4px;
+       text-transform: uppercase; letter-spacing: 0.5px; }
+  .visit { display: flex; align-items: center; gap: 12px; padding: 2px 6px; border-radius: 3px; }
+  .visit:hover { background: #2a2a2a; }
+  time { color: #777; font: 12px Consolas, monospace; flex: none; }
+  a { color: #ddd; text-decoration: none; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; min-width: 0; }
+  a:hover { color: #fff; text-decoration: underline; }
+  .host { color: #777; font-size: 12px; white-space: nowrap; margin-right: auto; }
+  .visit button { visibility: hidden; padding: 0 6px; border: 0; background: none; color: #888; }
+  .visit:hover button { visibility: visible; }
+  .visit button:hover { color: #fff; }
+  .note { color: #888; }
+  kbd { font: 13px Consolas, monospace; color: #50dcaa; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>History</h1>
+    <input id="q" spellcheck="false" autocomplete="off" placeholder="Search history (gi)">
+    <button id="clear">Clear history</button>
+  </header>
+  <div id="list"></div>
+</main>
+<script>
+  const send = (msg) => window.ipc.postMessage(msg);
+  const $ = (id) => document.getElementById(id);
+
+  let timer = null;
+  $("q").addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => send(`history-search ${$("q").value}`), 150);
+  });
+  $("clear").addEventListener("click", () => {
+    if (confirm("Forget every page in the history?")) send("history-clear");
+  });
+
+  const day = (date) => {
+    const today = new Date();
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    if (date.toDateString() === today.toDateString()) return "Today";
+    if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+    return date.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  };
+  const host = (url) => { try { return new URL(url).host; } catch { return ""; } };
+
+  // Called by zeteme with the newest matching [time, url, title] visits.
+  window.zetemeHistory = (visits, query) => {
+    // A reply to a search typed over since.
+    if (query !== $("q").value.trim()) return;
+    const out = [];
+    let last = "";
+    for (const [time, url, title] of visits) {
+      const date = new Date(time * 1000);
+      const heading = day(date);
+      if (heading !== last) {
+        const h = document.createElement("h2");
+        h.textContent = last = heading;
+        out.push(h);
+      }
+      const row = document.createElement("div");
+      row.className = "visit";
+      const when = document.createElement("time");
+      when.textContent = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+      const link = document.createElement("a");
+      link.href = url;
+      link.textContent = title || url;
+      link.title = url;
+      const site = document.createElement("span");
+      site.className = "host";
+      site.textContent = host(url);
+      const remove = document.createElement("button");
+      remove.textContent = "×";
+      remove.title = "Remove from history";
+      remove.addEventListener("click", () => { send(`history-delete ${time} ${url}`); row.remove(); });
+      row.append(when, link, site, remove);
+      out.push(row);
+    }
+    if (!out.length) {
+      const none = document.createElement("p");
+      none.className = "note";
+      none.textContent = query ? "Nothing in the history matches." : "The history is empty.";
+      out.push(none);
+    }
+    $("list").replaceChildren(...out);
+  };
+
+  send("history-search ");
+</script>
+</body>
+</html>

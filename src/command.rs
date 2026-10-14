@@ -3,7 +3,7 @@
 use crate::{
     extensions::Page,
     settings::StartPage,
-    tabbar::{Position, Show},
+    tabbar::{Button, Position, Show},
 };
 
 const SEARCH_URL: &str = "https://duckduckgo.com/?q=";
@@ -43,13 +43,55 @@ pub enum Command {
     ExtensionRemove(String),
     ExtensionEnable(String, bool),
     ExtensionPage(String, Page),
+    /// Opens the history page.
+    History,
+    /// The history page asks for the visits matching this.
+    HistorySearch(String),
+    /// Forgets the visit at this time to this address.
+    HistoryDelete(u64, String),
+    HistoryClear,
+    SetHistory(bool),
+    SetButtons(Vec<Button>),
+    /// Opens the downloads page.
+    Downloads,
+    DownloadsReady,
+    Download(DownloadAction, u64),
+    DownloadsClear,
+    /// Opens the Downloads folder.
+    DownloadsFolder,
     Quit,
 }
 
+/// What the downloads page can do to one download.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DownloadAction {
+    Open,
+    Reveal,
+    Pause,
+    Resume,
+    Cancel,
+    Remove,
+}
+
+impl DownloadAction {
+    fn parse(text: &str) -> Option<DownloadAction> {
+        Some(match text {
+            "open" => DownloadAction::Open,
+            "reveal" => DownloadAction::Reveal,
+            "pause" => DownloadAction::Pause,
+            "resume" => DownloadAction::Resume,
+            "cancel" => DownloadAction::Cancel,
+            "remove" => DownloadAction::Remove,
+            _ => return None,
+        })
+    }
+}
+
 impl Command {
-    /// Commands only the settings page may send, so that web pages can't
-    /// change settings or start an install.
-    pub fn settings_only(&self) -> bool {
+    /// Commands only zeteme's own pages (settings, history, downloads) may
+    /// send, so that web pages can't change settings, start an install, or
+    /// read the history.
+    pub fn internal_only(&self) -> bool {
         matches!(
             self,
             Command::SettingsReady
@@ -65,6 +107,15 @@ impl Command {
                 | Command::ExtensionRemove(_)
                 | Command::ExtensionEnable(..)
                 | Command::ExtensionPage(..)
+                | Command::HistorySearch(_)
+                | Command::HistoryDelete(..)
+                | Command::HistoryClear
+                | Command::SetHistory(_)
+                | Command::SetButtons(_)
+                | Command::DownloadsReady
+                | Command::Download(..)
+                | Command::DownloadsClear
+                | Command::DownloadsFolder
         )
     }
 }
@@ -97,6 +148,9 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
             ("start_page", value) => Command::SetStartPage(StartPage::parse(value)?),
             ("reopen_tabs", "on") => Command::SetReopenTabs(true),
             ("reopen_tabs", "off") => Command::SetReopenTabs(false),
+            ("history", "on") => Command::SetHistory(true),
+            ("history", "off") => Command::SetHistory(false),
+            ("buttons", value) => Command::SetButtons(Button::parse_list(value)),
             _ => return None,
         },
         "update-check" => Command::CheckUpdate,
@@ -115,6 +169,21 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
         "ext-page" => {
             let (id, page) = arg.split_once(' ')?;
             Command::ExtensionPage(id.to_string(), Page::parse(page)?)
+        }
+        "history" => Command::History,
+        "history-search" => Command::HistorySearch(arg.to_string()),
+        "history-delete" => {
+            let (time, url) = arg.split_once(' ')?;
+            Command::HistoryDelete(time.parse().ok()?, url.to_string())
+        }
+        "history-clear" => Command::HistoryClear,
+        "downloads" => Command::Downloads,
+        "downloads-ready" => Command::DownloadsReady,
+        "downloads-clear" => Command::DownloadsClear,
+        "downloads-folder" => Command::DownloadsFolder,
+        "download" => {
+            let (action, id) = arg.split_once(' ')?;
+            Command::Download(DownloadAction::parse(action)?, id.parse().ok()?)
         }
         "quit" => Command::Quit,
         _ => return None,
@@ -245,9 +314,9 @@ mod tests {
             Some(Command::SetTabsShow(Show::Never))
         );
         assert_eq!(parse_ipc("set tabs_show sometimes"), None);
-        assert!(parse_ipc("set tabs_show always").unwrap().settings_only());
-        assert!(parse_ipc("update-install").unwrap().settings_only());
-        assert!(!parse_ipc("settings").unwrap().settings_only());
+        assert!(parse_ipc("set tabs_show always").unwrap().internal_only());
+        assert!(parse_ipc("update-install").unwrap().internal_only());
+        assert!(!parse_ipc("settings").unwrap().internal_only());
         assert_eq!(
             parse_ipc("ext-install C:\\My Extensions\\ublock"),
             Some(Command::ExtensionInstall(
@@ -263,15 +332,51 @@ mod tests {
             Some(Command::ExtensionPage("abc".into(), Page::Options))
         );
         assert_eq!(parse_ipc("ext-page abc toolbar"), None);
-        assert!(parse_ipc("ext-remove abc").unwrap().settings_only());
-        assert!(!parse_ipc("ext bitwarden").unwrap().settings_only());
+        assert!(parse_ipc("ext-remove abc").unwrap().internal_only());
+        assert!(!parse_ipc("ext bitwarden").unwrap().internal_only());
         assert_eq!(parse_ipc("bitwarden"), Some(Command::Bitwarden));
         assert_eq!(parse_ipc("bitwarden lock"), Some(Command::BitwardenLock));
         assert_eq!(parse_ipc("bitwarden vault"), Some(Command::BitwardenVault));
         assert_eq!(parse_ipc("bitwarden bogus"), None);
-        assert!(!Command::Bitwarden.settings_only());
-        assert!(parse_ipc("set save_passwords off").unwrap().settings_only());
+        assert!(!Command::Bitwarden.internal_only());
+        assert!(parse_ipc("set save_passwords off").unwrap().internal_only());
         assert_eq!(parse_ipc("open "), None);
+        assert_eq!(parse_ipc("history"), Some(Command::History));
+        assert!(!Command::History.internal_only());
+        assert_eq!(
+            parse_ipc("history-search rust  docs"),
+            Some(Command::HistorySearch("rust  docs".into()))
+        );
+        assert!(parse_ipc("history-search ").unwrap().internal_only());
+        assert_eq!(
+            parse_ipc("history-delete 1700000000 https://a.com/x y"),
+            Some(Command::HistoryDelete(
+                1700000000,
+                "https://a.com/x y".into()
+            ))
+        );
+        assert_eq!(parse_ipc("history-delete soon https://a.com/"), None);
+        assert!(parse_ipc("history-clear").unwrap().internal_only());
+        assert_eq!(
+            parse_ipc("set buttons downloads,settings"),
+            Some(Command::SetButtons(vec![
+                Button::Downloads,
+                Button::Settings
+            ]))
+        );
+        assert_eq!(parse_ipc("set buttons"), Some(Command::SetButtons(vec![])));
+        assert_eq!(
+            parse_ipc("set history off"),
+            Some(Command::SetHistory(false))
+        );
+        assert_eq!(parse_ipc("downloads"), Some(Command::Downloads));
+        assert!(!Command::Downloads.internal_only());
+        assert_eq!(
+            parse_ipc("download reveal 12"),
+            Some(Command::Download(DownloadAction::Reveal, 12))
+        );
+        assert_eq!(parse_ipc("download explode 12"), None);
+        assert!(parse_ipc("download open 1").unwrap().internal_only());
         assert_eq!(parse_ipc("bogus"), None);
     }
 }

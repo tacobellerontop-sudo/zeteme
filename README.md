@@ -93,7 +93,7 @@ Keys work the same when an embedded player or other frame has focus.
 
 Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`; on its own it opens the start page), `:close`,
 `:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:ext <name>`,
-`:bw` / `:bw fill` / `:bw lock`, `:quit` (`:q`).
+`:bw` / `:bw fill` / `:bw lock`, `:history`, `:downloads` (`:dl`), `:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
@@ -111,6 +111,26 @@ tabs, then hides again; clicking a tab switches to it. In `:settings` you can
 also have it come up when the mouse reaches its edge of the window, show it
 always (pages make room for it) or never, and put it at the top, bottom, left
 or right.
+
+Buttons can be pinned at the end of the tab bar (the right end, or the
+bottom of a bar at the side) in `:settings`: Downloads, History, New tab,
+Bitwarden vault and Settings. Downloads is pinned to start with; it turns
+green and fills up while files download, and stays green until you look at
+`:downloads`.
+
+## History
+
+zeteme remembers the web pages you visit. `:history` lists them by day,
+newest first: type in its search box (`gi`) to find a page by its address or
+title, click one to open it, or forget one or all of them. `:settings` turns
+the history off.
+
+## Downloads
+
+Downloads go to your Downloads folder, and `:downloads` lists them, with
+their progress, buttons to pause, resume and cancel them, and to open a
+finished file or show it in its folder. Quitting while files are still
+downloading asks you to quit again first, since it cancels them.
 
 ## Passwords
 
@@ -160,5 +180,6 @@ removes them.
 
 ## Data
 
-Cookies, logins, settings, extensions, the open tabs and the window's size
-and place are kept in `%LOCALAPPDATA%\zeteme`. Downloads go to your Downloads folder.
+Cookies, logins, settings, extensions, the history, the list of downloads,
+the open tabs and the window's size and place are kept in
+`%LOCALAPPDATA%\zeteme`. Downloads go to your Downloads folder.
