@@ -1,0 +1,152 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Downloads</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 32px 40px; background: #1e1e1e; color: #ddd;
+         font: 14px/1.5 "Segoe UI", sans-serif; }
+  main { max-width: 760px; }
+  header { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 auto 0 0; }
+  button { font: inherit; color: #fff; background: #333; border: 1px solid #555;
+           border-radius: 3px; padding: 3px 12px; cursor: pointer; }
+  button:hover { background: #3c3c3c; }
+  .download { padding: 10px 14px; border: 1px solid #3a3a3a; border-radius: 4px; margin-bottom: 8px; }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .name { font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis;
+          white-space: nowrap; margin-right: auto; }
+  .done .name { cursor: pointer; }
+  .done .name:hover { text-decoration: underline; }
+  .canceled .name { color: #888; text-decoration: line-through; cursor: default; }
+  .top button { padding: 1px 10px; font-size: 13px; }
+  .info { color: #888; font-size: 12px; display: flex; gap: 12px; }
+  .info span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .failed .status { color: #e77; }
+  .bar { height: 3px; background: #333; border-radius: 2px; margin: 6px 0 4px; overflow: hidden; }
+  .bar div { height: 100%; background: #50dcaa; }
+  .paused .bar div { background: #888; }
+  .note { color: #888; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Downloads</h1>
+    <button id="folder">Open Downloads folder</button>
+    <button id="clear">Clear list</button>
+  </header>
+  <div id="list"></div>
+</main>
+<script>
+  const send = (msg) => window.ipc.postMessage(msg);
+  const $ = (id) => document.getElementById(id);
+  $("folder").addEventListener("click", () => send("downloads-folder"));
+  $("clear").addEventListener("click", () => send("downloads-clear"));
+
+  const size = (bytes) => {
+    if (bytes < 0) return "?";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+    return `${bytes.toFixed(i && bytes < 10 ? 1 : 0)} ${units[i]}`;
+  };
+  const host = (url) => { try { return new URL(url).host; } catch { return ""; } };
+  const button = (text, msg) => {
+    const b = document.createElement("button");
+    b.textContent = text;
+    b.addEventListener("click", () => send(msg));
+    return b;
+  };
+
+  // Rows by download id. Progress only changes a row's text and bar: a row
+  // rebuilt between mousedown and mouseup would swallow the click.
+  const rows = new Map();
+
+  function build(id, name, path, url, state, resumable) {
+    const row = document.createElement("div");
+    row.className = `download ${state}`;
+    const top = document.createElement("div");
+    top.className = "top";
+    const title = document.createElement("span");
+    title.className = "name";
+    title.textContent = name;
+    title.title = path;
+    top.append(title);
+    if (state === "done") {
+      title.addEventListener("click", () => send(`download open ${id}`));
+      top.append(button("Open", `download open ${id}`), button("Show in folder", `download reveal ${id}`));
+    }
+    if (state === "running") top.append(button("Pause", `download pause ${id}`));
+    if (resumable) top.append(button("Resume", `download resume ${id}`));
+    if (state === "running" || state === "paused" || resumable) top.append(button("Cancel", `download cancel ${id}`));
+    if (state === "done" || state === "canceled" || (state === "failed" && !resumable)) {
+      top.append(button("Remove", `download remove ${id}`));
+    }
+    row.append(top);
+    let fill = null;
+    if (state === "running" || state === "paused") {
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      fill = document.createElement("div");
+      bar.append(fill);
+      row.append(bar);
+    }
+    const info = document.createElement("div");
+    info.className = "info";
+    const status = document.createElement("span");
+    status.className = "status";
+    const when = document.createElement("span");
+    const from = document.createElement("span");
+    from.textContent = host(url);
+    from.title = url;
+    info.append(status, when, from);
+    row.append(info);
+    return { row, fill, status, when, key: `${state} ${resumable}` };
+  }
+
+  // Called by zeteme with [id, name, path, url, state, reason, resumable,
+  // received, total, time] for every download, newest first.
+  window.zetemeDownloads = (list) => {
+    const seen = new Set();
+    const order = list.map(([id, name, path, url, state, reason, resumable, received, total, time]) => {
+      seen.add(id);
+      let r = rows.get(id);
+      if (!r || r.key !== `${state} ${resumable}`) {
+        const fresh = build(id, name, path, url, state, resumable);
+        if (r) r.row.replaceWith(fresh.row);
+        rows.set(id, r = fresh);
+      }
+      if (r.fill) {
+        r.fill.style.width = total > 0 ? `${Math.min(100, (100 * received) / total)}%` : "100%";
+        r.fill.style.opacity = total > 0 ? "1" : "0.4";
+      }
+      r.status.textContent = {
+        running: `${size(received)} of ${size(total)}`,
+        paused: `Paused, ${size(received)} of ${size(total)}`,
+        done: size(total),
+        canceled: "Canceled",
+        failed: `Failed${reason ? `: ${reason}` : ""}`,
+      }[state];
+      r.when.textContent = new Date(time * 1000).toLocaleString(undefined,
+        { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      return r.row;
+    });
+    for (const id of [...rows.keys()]) if (!seen.has(id)) rows.delete(id);
+    if (!order.length) {
+      const none = document.createElement("p");
+      none.className = "note";
+      none.textContent = "No downloads yet.";
+      order.push(none);
+    }
+    const now = [...$("list").children];
+    if (now.length !== order.length || now.some((el, i) => el !== order[i])) {
+      $("list").replaceChildren(...order);
+    }
+  };
+
+  send("downloads-ready");
+</script>
+</body>
+</html>

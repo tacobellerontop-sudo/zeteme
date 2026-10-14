@@ -31,6 +31,8 @@
   .ext button { padding: 1px 8px; }
   #ext-add { display: flex; gap: 8px; margin-bottom: 8px; }
   #ext-status { color: #aaa; }
+  #buttons { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 12px; }
+  #buttons label { margin: 0; }
   .note { color: #aaa; font-size: 13px; }
 </style>
 </head>
@@ -85,6 +87,23 @@
       <option value="left">left</option>
       <option value="right">right</option>
     </select></label>
+  <p>Buttons at the end of the tab bar</p>
+  <div id="buttons">
+    <label><input type="checkbox" value="downloads"> Downloads</label>
+    <label><input type="checkbox" value="history"> History</label>
+    <label><input type="checkbox" value="newtab"> New tab</label>
+    <label><input type="checkbox" value="bitwarden"> Bitwarden vault</label>
+    <label><input type="checkbox" value="settings"> Settings</label>
+  </div>
+  <p class="note">The buttons show with the tab bar, so they are handiest with it
+    shown always or on hover.</p>
+</section>
+<section>
+  <h2>History</h2>
+  <label><input type="checkbox" id="history" {{history}}>
+    Remember the pages I visit</label>
+  <p class="note"><code>:history</code> lists and searches them, and forgets
+    some or all of them. Downloads are listed in <code>:downloads</code>.</p>
 </section>
 <section>
   <h2>Extensions</h2>
@@ -107,6 +126,13 @@
     $(id).value = value;
     $(id).addEventListener("change", (e) => send(`set ${id} ${e.target.value}`));
   }
+  const pinned = "{{buttons}}".split(",");
+  const boxes = [...document.querySelectorAll("#buttons input")];
+  for (const box of boxes) {
+    box.checked = pinned.includes(box.value);
+    box.addEventListener("change", () => send(`set buttons ${boxes.filter((b) => b.checked).map((b) => b.value).join(",")}`));
+  }
+  $("history").addEventListener("change", (e) => send(`set history ${e.target.checked ? "on" : "off"}`));
   $("reopen_tabs").addEventListener("change", (e) => send(`set reopen_tabs ${e.target.checked ? "on" : "off"}`));
   $("save_passwords").addEventListener("change", (e) => send(`set save_passwords ${e.target.checked ? "on" : "off"}`));
   $("check").addEventListener("click", () => send("update-check"));

@@ -5,7 +5,7 @@ use std::{fs, path::Path};
 
 use crate::{
     extensions::Extension,
-    tabbar::{Position, Show},
+    tabbar::{Button, Position, Show},
     update::{CURRENT_VERSION, Status},
 };
 
@@ -23,6 +23,24 @@ pub const SETTINGS_URL: &str = "zeteme://settings/";
 pub const START_URL: &str = "http://zeteme.start/";
 #[cfg(not(windows))]
 pub const START_URL: &str = "zeteme://start/";
+
+/// zeteme's history and downloads pages.
+#[cfg(windows)]
+pub const HISTORY_URL: &str = "http://zeteme.history/";
+#[cfg(not(windows))]
+pub const HISTORY_URL: &str = "zeteme://history/";
+#[cfg(windows)]
+pub const DOWNLOADS_URL: &str = "http://zeteme.downloads/";
+#[cfg(not(windows))]
+pub const DOWNLOADS_URL: &str = "zeteme://downloads/";
+
+/// Whether `url` is one of zeteme's own pages that may change settings and
+/// see the history and downloads. The start page isn't: it needs neither.
+pub fn is_internal(url: &str) -> bool {
+    [SETTINGS_URL, HISTORY_URL, DOWNLOADS_URL]
+        .iter()
+        .any(|page| url.starts_with(page))
+}
 
 /// What zeteme opens when it starts with no tabs to restore, and in new tabs.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,6 +88,10 @@ pub struct Settings {
     pub start_page: StartPage,
     /// Reopen the tabs that were open when zeteme last closed.
     pub reopen_tabs: bool,
+    /// Keep a history of the pages visited.
+    pub history: bool,
+    /// The buttons pinned at the end of the tab bar, in order.
+    pub buttons: Vec<Button>,
 }
 
 impl Default for Settings {
@@ -81,6 +103,8 @@ impl Default for Settings {
             tabs_position: Position::Top,
             start_page: StartPage::Zeteme,
             reopen_tabs: false,
+            history: true,
+            buttons: vec![Button::Downloads],
         }
     }
 }
@@ -111,6 +135,8 @@ impl Settings {
                     settings.start_page = StartPage::parse(value).unwrap_or(settings.start_page)
                 }
                 "reopen_tabs" => settings.reopen_tabs = value == "true",
+                "history" => settings.history = value != "false",
+                "buttons" => settings.buttons = Button::parse_list(value),
                 _ => {}
             }
         }
@@ -122,13 +148,15 @@ impl Settings {
             file,
             format!(
                 "check_updates={}\nsave_passwords={}\ntabs_show={}\ntabs_position={}\n\
-                 start_page={}\nreopen_tabs={}\n",
+                 start_page={}\nreopen_tabs={}\nhistory={}\nbuttons={}\n",
                 self.check_updates,
                 self.save_passwords,
                 self.tabs_show.as_str(),
                 self.tabs_position.as_str(),
                 self.start_page.as_str(),
-                self.reopen_tabs
+                self.reopen_tabs,
+                self.history,
+                Button::list_str(&self.buttons)
             ),
         );
     }
@@ -161,6 +189,8 @@ pub fn page(settings: &Settings) -> String {
             "{{reopen_tabs}}",
             if settings.reopen_tabs { "checked" } else { "" },
         )
+        .replace("{{history}}", if settings.history { "checked" } else { "" })
+        .replace("{{buttons}}", &Button::list_str(&settings.buttons))
 }
 
 /// zeteme's start page.
@@ -255,6 +285,22 @@ mod tests {
         );
         assert!(!Settings::parse("").reopen_tabs);
         assert!(Settings::parse("reopen_tabs=true").reopen_tabs);
+        assert!(Settings::parse("").history);
+        assert_eq!(Settings::parse("").buttons, vec![Button::Downloads]);
+        assert!(Settings::parse("buttons=").buttons.is_empty());
+        assert_eq!(
+            Settings::parse("buttons=settings,bogus,history").buttons,
+            vec![Button::Settings, Button::History]
+        );
+    }
+
+    #[test]
+    fn knows_its_own_pages() {
+        assert!(is_internal(SETTINGS_URL));
+        assert!(is_internal(&format!("{HISTORY_URL}?q=x")));
+        assert!(!is_internal(START_URL));
+        assert!(!is_internal("http://zeteme.history.example.com/"));
+        assert!(!is_internal("https://example.com/"));
     }
 
     #[test]
@@ -264,6 +310,8 @@ mod tests {
             tabs_show: Show::Hover,
             start_page: StartPage::DuckDuckGo,
             reopen_tabs: true,
+            history: false,
+            buttons: vec![Button::History, Button::Downloads],
             ..Settings::default()
         };
         let file = std::env::temp_dir().join(format!("zeteme-test-{}.txt", std::process::id()));

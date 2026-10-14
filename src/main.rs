@@ -3,8 +3,10 @@
 
 mod bitwarden;
 mod command;
+mod downloads;
 mod extensions;
 mod geometry;
+mod history;
 mod json;
 mod settings;
 mod tabbar;
@@ -12,18 +14,21 @@ mod update;
 
 use std::{
     borrow::Cow,
+    cell::Cell,
     fs,
     path::{Path, PathBuf},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use bitwarden::Login;
-use command::{Command, normalize_url, parse_ipc};
+use command::{Command, DownloadAction, normalize_url, parse_ipc};
+use downloads::{Download, Downloads};
 use extensions::{Extension, Index, Page};
 use geometry::Geometry;
-use settings::{SETTINGS_URL, Settings, js_string};
-use tabbar::{Extent, Show};
+use history::History;
+use settings::{DOWNLOADS_URL, HISTORY_URL, SETTINGS_URL, Settings, js_string};
+use tabbar::{Button, Extent, Show};
 use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
@@ -37,7 +42,7 @@ use tao::{
 };
 use update::Status;
 use wry::{
-    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
+    NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder,
     http::{Request, Response},
 };
 #[cfg(windows)]
@@ -77,6 +82,9 @@ enum UserEvent {
     Flash(u64, String),
     /// A message from the Bitwarden prompt or vault panel.
     Prompt(String),
+    /// A page finished loading in the tab.
+    Loaded(u64),
+    Download(u64, downloads::Event),
 }
 
 /// What a Bitwarden prompt is for: the tab and page it fills.
@@ -93,6 +101,8 @@ struct Tab {
     webview: WebView,
     title: String,
     zoom: f64,
+    /// The time and address of the visit last put in the history.
+    visit: Option<(u64, String)>,
 }
 
 struct Browser {
@@ -130,6 +140,13 @@ struct Browser {
     refreshing: bool,
     pending: Option<Pending>,
     prompt: Option<WebView>,
+    history: History,
+    downloads: Downloads,
+    /// When download progress was last shown, so it is shown a few times a
+    /// second rather than for every chunk.
+    downloads_shown: Cell<Instant>,
+    /// Whether quitting was already put off once for downloads going on.
+    quit_warned: bool,
 }
 
 /// Where cookies, logins and the saved session live: `%LOCALAPPDATA%\zeteme`.
@@ -216,6 +233,14 @@ fn build_tab_bar(
                 UserEvent::TabBarHover(on == "on")
             } else if let Some(index) = msg.strip_prefix("select ").and_then(|i| i.parse().ok()) {
                 UserEvent::SelectTab(index)
+            } else if let Some(button) = msg.strip_prefix("button ").and_then(Button::parse) {
+                UserEvent::Command(match button {
+                    Button::Downloads => Command::Downloads,
+                    Button::History => Command::History,
+                    Button::NewTab => Command::NewTab,
+                    Button::Bitwarden => Command::BitwardenVault,
+                    Button::Settings => Command::Settings,
+                })
             } else {
                 return;
             };
@@ -267,12 +292,20 @@ impl Browser {
                 }
             })
             .collect();
+        let buttons: Vec<String> = self
+            .settings
+            .buttons
+            .iter()
+            .map(|button| js_string(button.as_str()))
+            .collect();
         let _ = self.tab_bar.evaluate_script(&format!(
-            "window.zetemeTabs && zetemeTabs([{}], {}, {})",
+            "window.zetemeTabs && zetemeTabs([{}], {}, {}, [{}])",
             titles.join(","),
             self.current,
-            self.settings.tabs_position.vertical()
+            self.settings.tabs_position.vertical(),
+            buttons.join(",")
         ));
+        self.show_downloads(true);
     }
 
     /// In `Show::Auto` and `Show::Hover`, shows the bar for a moment.
@@ -298,6 +331,7 @@ impl Browser {
         let command_proxy = self.proxy.clone();
         let title_proxy = self.proxy.clone();
         let popup_proxy = self.proxy.clone();
+        let load_proxy = self.proxy.clone();
         let settings_file = self.settings_file.clone();
         let bounds = self.bounds();
         let webview = with_extensions(WebViewBuilder::new_with_web_context(&mut self.context))
@@ -308,10 +342,11 @@ impl Browser {
             .with_custom_protocol("zeteme".into(), move |_, req| {
                 // wry hands over zeteme://start/ here even where the page's
                 // own address is http://zeteme.start/ (Windows).
-                let page = if req.uri().host() == Some("start") {
-                    settings::start_page().to_string()
-                } else {
-                    settings::page(&Settings::load(&settings_file))
+                let page = match req.uri().host() {
+                    Some("start") => settings::start_page().to_string(),
+                    Some("history") => history::PAGE.to_string(),
+                    Some("downloads") => downloads::PAGE.to_string(),
+                    _ => settings::page(&Settings::load(&settings_file)),
                 };
                 Response::builder()
                     .header("Content-Type", "text/html; charset=utf-8")
@@ -319,9 +354,9 @@ impl Browser {
                     .unwrap()
             })
             .with_ipc_handler(move |req: Request<String>| {
-                let from_settings = req.uri().to_string().starts_with(SETTINGS_URL);
+                let internal = settings::is_internal(&req.uri().to_string());
                 match parse_ipc(req.body()) {
-                    Some(command) if from_settings || !command.settings_only() => {
+                    Some(command) if internal || !command.internal_only() => {
                         let _ = command_proxy.send_event(UserEvent::Command(command));
                     }
                     _ => {}
@@ -329,6 +364,11 @@ impl Browser {
             })
             .with_document_title_changed_handler(move |title| {
                 let _ = title_proxy.send_event(UserEvent::Title(id, title));
+            })
+            .with_on_page_load_handler(move |event, _| {
+                if let PageLoadEvent::Finished = event {
+                    let _ = load_proxy.send_event(UserEvent::Loaded(id));
+                }
             })
             .with_new_window_req_handler(move |url, features| {
                 // Sized popups (e.g. "Sign in with ..." flows) need a real
@@ -342,12 +382,20 @@ impl Browser {
             })
             .build_as_child(&self.window)?;
         set_password_saving(&webview, self.settings.save_passwords);
+        #[cfg(windows)]
+        {
+            let proxy = self.proxy.clone();
+            let _ = downloads::webview2::watch(&webview, move |download, event| {
+                let _ = proxy.send_event(UserEvent::Download(download, event));
+            });
+        }
 
         self.tabs.push(Tab {
             id,
             webview,
             title: String::new(),
             zoom: 1.0,
+            visit: None,
         });
         self.select(self.tabs.len() - 1);
         Ok(())
@@ -395,7 +443,7 @@ impl Browser {
     fn close_current(&mut self) -> bool {
         if self.tabs.len() == 1 {
             // Closing the last tab quits, like :q, and keeps it for next time.
-            return false;
+            return !self.may_quit();
         }
         let tab = self.tabs.remove(self.current);
         if let Ok(url) = tab.webview.url() {
@@ -445,30 +493,186 @@ impl Browser {
         });
     }
 
-    fn open_settings(&mut self) {
-        let open = self.tabs.iter().position(|tab| {
-            tab.webview
-                .url()
-                .is_ok_and(|url| url.starts_with(SETTINGS_URL))
-        });
+    /// Switches to the tab showing zeteme's own page at `url`, or opens one.
+    fn open_page(&mut self, url: &str) {
+        let open = self
+            .tabs
+            .iter()
+            .position(|tab| tab.webview.url().is_ok_and(|u| u.starts_with(url)));
         match open {
             Some(index) => self.select(index),
             None => {
-                let _ = self.open_tab(SETTINGS_URL);
+                let _ = self.open_tab(url);
+            }
+        }
+    }
+
+    fn open_settings(&mut self) {
+        self.open_page(SETTINGS_URL);
+    }
+
+    /// Runs `script` on every open tab showing zeteme's own page at `url`.
+    fn eval_page(&self, url: &str, script: &str) {
+        for tab in &self.tabs {
+            if tab.webview.url().is_ok_and(|u| u.starts_with(url)) {
+                let _ = tab.webview.evaluate_script(script);
             }
         }
     }
 
     /// Runs `script` on every open settings page.
     fn eval_settings(&self, script: &str) {
-        for tab in &self.tabs {
-            if tab
-                .webview
-                .url()
-                .is_ok_and(|url| url.starts_with(SETTINGS_URL))
-            {
-                let _ = tab.webview.evaluate_script(script);
+        self.eval_page(SETTINGS_URL, script);
+    }
+
+    /// Puts the tab's page in the history, or gives the visit its title.
+    /// `titled` says the tab's title just changed, so it is this page's.
+    fn note_visit(&mut self, id: u64, titled: bool) {
+        if !self.settings.history {
+            return;
+        }
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        let url = tab.webview.url().unwrap_or_default();
+        if !history::worth_keeping(&url) {
+            return;
+        }
+        match &tab.visit {
+            Some((time, visited)) if *visited == url => {
+                self.history.retitle(*time, &url, &tab.title);
             }
+            _ => {
+                // Otherwise the title may still be the page before's.
+                let title = if titled { tab.title.as_str() } else { "" };
+                let time = self.history.add(&url, title);
+                tab.visit = Some((time, url));
+            }
+        }
+    }
+
+    /// Lists the visits matching `query` on any open history page.
+    fn show_history(&self, query: &str) {
+        let rows: Vec<String> = self
+            .history
+            .search(query)
+            .iter()
+            .map(|visit| {
+                format!(
+                    "[{}, {}, {}]",
+                    visit.time,
+                    js_string(&visit.url),
+                    js_string(&visit.title)
+                )
+            })
+            .collect();
+        self.eval_page(
+            HISTORY_URL,
+            &format!(
+                "window.zetemeHistory && zetemeHistory([{}], {})",
+                rows.join(","),
+                js_string(query)
+            ),
+        );
+    }
+
+    /// Shows the downloads on the tab bar's button and any open downloads
+    /// page; progress alone only a few times a second.
+    fn show_downloads(&self, now: bool) {
+        if !now && self.downloads_shown.get().elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        self.downloads_shown.set(Instant::now());
+        let (going, done) = self.downloads.summary();
+        let _ = self.tab_bar.evaluate_script(&format!(
+            "window.zetemeDownloadButton && zetemeDownloadButton({going}, {done}, {})",
+            self.downloads.unseen
+        ));
+        self.eval_page(DOWNLOADS_URL, &self.downloads.script());
+    }
+
+    fn download_event(&mut self, id: u64, event: downloads::Event) {
+        let tab = self.tabs[self.current].id;
+        match event {
+            downloads::Event::Started { url, path, total } => {
+                let download = Download {
+                    id,
+                    time: history::now(),
+                    url,
+                    path,
+                    received: 0,
+                    total,
+                    state: downloads::State::Running,
+                };
+                self.flash(
+                    tab,
+                    &format!("Downloading {} (:downloads)", download.name()),
+                );
+                self.downloads.start(download);
+                self.quit_warned = false;
+                self.show_downloads(true);
+                self.flash_tab_bar();
+            }
+            downloads::Event::Progress { received, total } => {
+                self.downloads.progress(id, received, total);
+                self.show_downloads(false);
+            }
+            downloads::Event::State { state, path } => {
+                if let Some(download) = self.downloads.set_state(id, state, Some(path)) {
+                    let name = download.name();
+                    let note = match &download.state {
+                        downloads::State::Done => format!("Downloaded {name}"),
+                        downloads::State::Failed(reason, _) => {
+                            format!("Download failed: {name} ({reason})")
+                        }
+                        _ => format!("Canceled {name}"),
+                    };
+                    self.flash(tab, &note);
+                    self.flash_tab_bar();
+                }
+                self.show_downloads(true);
+            }
+        }
+    }
+
+    /// Quitting cancels downloads, so the first try while any are going on
+    /// only says so.
+    fn may_quit(&mut self) -> bool {
+        let (going, _) = self.downloads.summary();
+        if going == 0 || self.quit_warned {
+            return true;
+        }
+        self.quit_warned = true;
+        let tab = self.tabs[self.current].id;
+        let note = if going == 1 {
+            "A download is going on: quit again to cancel it".to_string()
+        } else {
+            format!("{going} downloads are going on: quit again to cancel them")
+        };
+        self.flash(tab, &note);
+        self.flash_tab_bar();
+        false
+    }
+
+    fn download_action(&mut self, action: DownloadAction, id: u64) {
+        let Some(download) = self.downloads.get(id) else {
+            return;
+        };
+        match action {
+            DownloadAction::Open => downloads::open(&download.path),
+            DownloadAction::Reveal => downloads::reveal(&download.path),
+            DownloadAction::Remove => {
+                self.downloads.remove(id);
+                self.show_downloads(true);
+            }
+            #[cfg(windows)]
+            DownloadAction::Pause => downloads::webview2::pause(id),
+            #[cfg(windows)]
+            DownloadAction::Resume => downloads::webview2::resume(id),
+            #[cfg(windows)]
+            DownloadAction::Cancel => downloads::webview2::cancel(id),
+            #[cfg(not(windows))]
+            _ => {}
         }
     }
 
@@ -972,6 +1176,10 @@ impl Browser {
             }
             Command::NextTab => self.select((self.current + 1) % self.tabs.len()),
             Command::PrevTab => self.select((self.current + self.tabs.len() - 1) % self.tabs.len()),
+            Command::SelectTab(n) => {
+                let last = self.tabs.len() - 1;
+                self.select(if n == 9 { last } else { (n - 1).min(last) });
+            }
             Command::ZoomIn => self.set_zoom(self.tabs[self.current].zoom + ZOOM_STEP),
             Command::ZoomOut => self.set_zoom(self.tabs[self.current].zoom - ZOOM_STEP),
             Command::ZoomReset => self.set_zoom(1.0),
@@ -1029,7 +1237,41 @@ impl Browser {
             Command::ExtensionPage(id, page) => {
                 self.open_extension_page(&id, page);
             }
-            Command::Quit => return false,
+            Command::History => self.open_page(HISTORY_URL),
+            Command::HistorySearch(query) => self.show_history(&query),
+            Command::HistoryDelete(time, url) => self.history.remove(time, &url),
+            Command::HistoryClear => {
+                self.history.clear();
+                for tab in &mut self.tabs {
+                    tab.visit = None;
+                }
+                self.show_history("");
+            }
+            Command::SetHistory(on) => {
+                self.settings.history = on;
+                self.settings.save(&self.settings_file);
+            }
+            Command::SetButtons(buttons) => {
+                self.settings.buttons = buttons;
+                self.settings.save(&self.settings_file);
+                self.draw_tab_bar();
+            }
+            Command::Downloads => {
+                self.open_page(DOWNLOADS_URL);
+                self.downloads.unseen = false;
+                self.show_downloads(true);
+            }
+            Command::DownloadsReady => {
+                self.downloads.unseen = false;
+                self.show_downloads(true);
+            }
+            Command::Download(action, id) => self.download_action(action, id),
+            Command::DownloadsClear => {
+                self.downloads.clear_finished();
+                self.show_downloads(true);
+            }
+            Command::DownloadsFolder => downloads::reveal_folder(),
+            Command::Quit => return !self.may_quit(),
         }
         true
     }
@@ -1043,6 +1285,8 @@ fn main() -> wry::Result<()> {
     let geometry_file = data_dir.join("window.txt");
     let extensions_dir = data_dir.join("extensions");
     let _ = fs::create_dir_all(&extensions_dir);
+    let history = History::load(&data_dir.join("history.txt"));
+    let downloads = Downloads::load(&data_dir.join("downloads.txt"));
     let settings = Settings::load(&settings_file);
 
     // Restore the last session, then open any URL given on the command line.
@@ -1125,6 +1369,10 @@ fn main() -> wry::Result<()> {
         refreshing: false,
         pending: None,
         prompt: None,
+        history,
+        downloads,
+        downloads_shown: Cell::new(Instant::now()),
+        quit_warned: false,
     };
     browser.track_geometry();
     for url in &urls {
@@ -1142,7 +1390,7 @@ fn main() -> wry::Result<()> {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
-            } => false,
+            } => !browser.may_quit(),
             Event::WindowEvent {
                 event: WindowEvent::Resized(_),
                 ..
@@ -1287,10 +1535,19 @@ fn main() -> wry::Result<()> {
                 browser.prompt_message(&msg);
                 true
             }
+            Event::UserEvent(UserEvent::Loaded(id)) => {
+                browser.note_visit(id, false);
+                true
+            }
+            Event::UserEvent(UserEvent::Download(id, event)) => {
+                browser.download_event(id, event);
+                true
+            }
             Event::UserEvent(UserEvent::Title(id, title)) => {
                 if let Some(tab) = browser.tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.title = title;
                 }
+                browser.note_visit(id, true);
                 browser.update_title();
                 browser.draw_tab_bar();
                 // Titles change on every navigation, so this keeps the

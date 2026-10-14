@@ -67,7 +67,9 @@ zeteme has no toolbar and only a pop-up tab bar; everything is done from the key
 modeled on qutebrowser. Clicking or tabbing into a text field puts you in
 insert mode, where keys go to the page until you press `Esc`. A field the page
 focuses by itself (a search box on load, say) doesn't: click it or press `i`.
-Keys work the same when an embedded player or other frame has focus.
+Keys work the same when an embedded player or other frame has focus. The
+usual Ctrl shortcuts (`Ctrl-T`, `Ctrl-W` and so on, below) work in text
+fields as well.
 
 | Key | Action |
 | --- | --- |
@@ -88,12 +90,19 @@ Keys work the same when an embedded player or other frame has focus.
 | `gi` | Focus the first text field |
 | `i` | Type into the field the page focused |
 | `Ctrl-Shift-L` | Fill the login form from Bitwarden |
+| `Ctrl-T` / `Ctrl-W` / `Ctrl-Shift-T` | New tab / close tab / reopen closed tab |
+| `Ctrl-Tab` / `Ctrl-Shift-Tab` (or `Ctrl-PgDn` / `Ctrl-PgUp`) | Next / previous tab |
+| `Ctrl-1` ... `Ctrl-8` / `Ctrl-9` | Go to that tab / the last tab |
+| `Ctrl-L` / `Ctrl-F` / `Ctrl-R` (or `F5`) | Edit the URL / find / reload |
+| `Alt-Left` / `Alt-Right` | Back / forward |
+| `Ctrl-+` / `Ctrl--` / `Ctrl-0` | Zoom in / out / reset |
+| `Ctrl-H` / `Ctrl-J` | History / downloads |
 | `:` | Command bar |
 | `Esc` | Leave insert mode, close the command bar or cancel hints |
 
 Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`; on its own it opens the start page), `:close`,
 `:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:ext <name>`,
-`:bw` / `:bw fill` / `:bw lock`, `:quit` (`:q`).
+`:bw` / `:bw fill` / `:bw lock`, `:history`, `:downloads` (`:dl`), `:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
@@ -111,6 +120,26 @@ tabs, then hides again; clicking a tab switches to it. In `:settings` you can
 also have it come up when the mouse reaches its edge of the window, show it
 always (pages make room for it) or never, and put it at the top, bottom, left
 or right.
+
+Buttons can be pinned at the end of the tab bar (the right end, or the
+bottom of a bar at the side) in `:settings`: Downloads, History, New tab,
+Bitwarden vault and Settings. Downloads is pinned to start with; it turns
+green and fills up while files download, and stays green until you look at
+`:downloads`.
+
+## History
+
+zeteme remembers the web pages you visit. `:history` lists them by day,
+newest first: type in its search box (`gi`) to find a page by its address or
+title, click one to open it, or forget one or all of them. `:settings` turns
+the history off.
+
+## Downloads
+
+Downloads go to your Downloads folder, and `:downloads` lists them, with
+their progress, buttons to pause, resume and cancel them, and to open a
+finished file or show it in its folder. Quitting while files are still
+downloading asks you to quit again first, since it cancels them.
 
 ## Passwords
 
@@ -160,5 +189,6 @@ removes them.
 
 ## Data
 
-Cookies, logins, settings, extensions, the open tabs and the window's size
-and place are kept in `%LOCALAPPDATA%\zeteme`. Downloads go to your Downloads folder.
+Cookies, logins, settings, extensions, the history, the list of downloads,
+the open tabs and the window's size and place are kept in
+`%LOCALAPPDATA%\zeteme`. Downloads go to your Downloads folder.
