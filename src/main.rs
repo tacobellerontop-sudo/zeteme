@@ -38,6 +38,8 @@ const BACKGROUND: (u8, u8, u8, u8) = (30, 30, 30, 255);
 const KEYS_JS: &str = include_str!("keys.js");
 /// The Bitwarden password prompt and login chooser.
 const PROMPT_HTML: &str = include_str!("prompt.html");
+/// The Bitwarden vault panel `:bw` opens.
+const VAULT_HTML: &str = include_str!("vault.html");
 
 enum UserEvent {
     Command(Command),
@@ -54,12 +56,14 @@ enum UserEvent {
     ExtensionAdded(PathBuf, Result<String, String>),
     ExtensionRemoved(String, Result<(), String>),
     ExtensionEnabled(Result<(), String>),
-    BitwardenLogins(u64, String, Result<Vec<Login>, bitwarden::Error>),
+    /// Logins for the tab and page, and whether they are for the vault panel.
+    BitwardenLogins(u64, String, bool, Result<Vec<Login>, bitwarden::Error>),
     BitwardenUnlocked(Result<String, bitwarden::Error>),
+    /// The whole vault, re-read in the background.
+    VaultRefreshed(Result<Vec<Login>, bitwarden::Error>),
     Flash(u64, String),
-    PromptUnlock(String),
-    PromptPick(usize),
-    PromptCancel,
+    /// A message from the Bitwarden prompt or vault panel.
+    Prompt(String),
 }
 
 /// What a Bitwarden prompt is for: the tab and page it fills.
@@ -67,6 +71,8 @@ struct Pending {
     tab: u64,
     url: String,
     logins: Vec<Login>,
+    /// Whether the vault panel opens once the vault is unlocked.
+    vault: bool,
 }
 
 struct Tab {
@@ -102,6 +108,10 @@ struct Browser {
     extension_status: String,
     /// The unlocked Bitwarden session key, kept only while zeteme runs.
     bitwarden_session: Option<String>,
+    /// Every login, read once after unlocking: running `bw` takes a second
+    /// or more, so lookups use this and refresh it in the background.
+    vault: Option<Vec<Login>>,
+    refreshing: bool,
     pending: Option<Pending>,
     prompt: Option<WebView>,
 }
@@ -532,19 +542,46 @@ impl Browser {
         }
     }
 
-    /// Asks Bitwarden for the logins of the current page.
-    fn bitwarden(&mut self) {
+    /// Asks Bitwarden for the logins of the current page, to fill one
+    /// (Ctrl-Shift-L), or for every login, for the vault panel (`:bw`).
+    fn bitwarden(&mut self, vault: bool) {
         let tab = &self.tabs[self.current];
         let (id, url) = (tab.id, tab.webview.url().unwrap_or_default());
-        if !url.starts_with("http") {
+        if !vault && !url.starts_with("http") {
             self.flash(id, "Bitwarden fills web pages only");
             return;
         }
+        match self.vault.clone() {
+            Some(logins) => {
+                self.bitwarden_logins(id, url, vault, Ok(logins));
+                self.refresh_vault();
+            }
+            None => self.lookup(id, url, vault),
+        }
+    }
+
+    /// Reads the whole vault, then carries on with the tab and page.
+    fn lookup(&self, tab: u64, url: String, vault: bool) {
         let session = self.bitwarden_session.clone();
         let proxy = self.proxy.clone();
         thread::spawn(move || {
-            let result = bitwarden::logins(&url, session.as_deref());
-            let _ = proxy.send_event(UserEvent::BitwardenLogins(id, url, result));
+            let result = bitwarden::logins(None, session.as_deref());
+            let _ = proxy.send_event(UserEvent::BitwardenLogins(tab, url, vault, result));
+        });
+    }
+
+    /// Re-reads the vault in the background, so logins added elsewhere show
+    /// up on the next lookup.
+    fn refresh_vault(&mut self) {
+        if self.refreshing {
+            return;
+        }
+        self.refreshing = true;
+        let session = self.bitwarden_session.clone();
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let result = bitwarden::logins(None, session.as_deref());
+            let _ = proxy.send_event(UserEvent::VaultRefreshed(result));
         });
     }
 
@@ -552,9 +589,26 @@ impl Browser {
         &mut self,
         tab: u64,
         url: String,
+        vault: bool,
         result: Result<Vec<Login>, bitwarden::Error>,
     ) {
+        if let Ok(logins) = &result {
+            self.vault = Some(logins.clone());
+        }
+        let result = result.map(|logins| {
+            if vault {
+                logins
+            } else {
+                let mut here: Vec<Login> = logins
+                    .into_iter()
+                    .filter(|login| bitwarden::matches(login, &url))
+                    .collect();
+                here.sort_by_cached_key(|login| login.name.to_lowercase());
+                here
+            }
+        });
         match result {
+            Ok(logins) if vault => self.open_vault(tab, url, logins),
             Ok(logins) if logins.is_empty() => self.flash(tab, "No Bitwarden login for this site"),
             Ok(mut logins) if logins.len() == 1 => self.fill(tab, &url, logins.remove(0)),
             Ok(logins) => {
@@ -566,15 +620,22 @@ impl Browser {
                         user => format!("{}  {user}", login.name),
                     })
                     .collect();
-                self.pending = Some(Pending { tab, url, logins });
+                self.pending = Some(Pending {
+                    tab,
+                    url,
+                    logins,
+                    vault,
+                });
                 self.open_prompt("choose", "Bitwarden: which login?", &items);
             }
             Err(bitwarden::Error::Locked) => {
                 self.bitwarden_session = None;
+                self.vault = None;
                 self.pending = Some(Pending {
                     tab,
                     url,
                     logins: Vec::new(),
+                    vault,
                 });
                 self.open_prompt("password", "Bitwarden master password: ", &[]);
             }
@@ -598,23 +659,59 @@ impl Browser {
             js_string(&login.password)
         ));
         if login.has_totp {
-            let session = self.bitwarden_session.clone();
-            let proxy = self.proxy.clone();
-            thread::spawn(move || {
-                let text = match bitwarden::totp(&login.id, session.as_deref()) {
-                    Ok(code) if bitwarden::copy(&code) => "Copied the one-time code".to_string(),
-                    Ok(_) => "Could not copy the one-time code".to_string(),
-                    Err(_) => "Could not get the one-time code".to_string(),
-                };
-                let _ = proxy.send_event(UserEvent::Flash(tab, text));
-            });
+            self.copy_totp(tab, login.id);
         }
     }
 
-    /// Shows the Bitwarden prompt over the bottom of the window, in a
-    /// webview of its own so the page can't read it.
-    fn open_prompt(&mut self, kind: &str, label: &str, items: &[String]) {
+    fn copy_totp(&self, tab: u64, id: String) {
+        let session = self.bitwarden_session.clone();
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let text = match bitwarden::totp(&id, session.as_deref()) {
+                Ok(code) if bitwarden::copy(&code) => "Copied the one-time code",
+                Ok(_) => "Could not copy the one-time code",
+                Err(_) => "Could not get the one-time code",
+            };
+            let _ = proxy.send_event(UserEvent::Flash(tab, text.to_string()));
+        });
+    }
+
+    /// Copies `text` and says so on the tab `tab`.
+    fn copy(&self, tab: u64, text: String, what: &'static str) {
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let note = if bitwarden::copy(&text) {
+                format!("Copied the {what}")
+            } else {
+                format!("Could not copy the {what}")
+            };
+            let _ = proxy.send_event(UserEvent::Flash(tab, note));
+        });
+    }
+
+    /// Shows a webview of zeteme's own over the page, so the page can't read
+    /// what is typed or listed in it. Its messages arrive as
+    /// `UserEvent::Prompt`.
+    fn open_overlay(&mut self, html: String, bounds: Rect) {
         self.close_prompt();
+        let proxy = self.proxy.clone();
+        let prompt = WebViewBuilder::new_with_web_context(&mut self.context)
+            .with_html(html)
+            .with_bounds(bounds)
+            .with_background_color(BACKGROUND)
+            .with_focused(true)
+            .with_ipc_handler(move |req: Request<String>| {
+                let _ = proxy.send_event(UserEvent::Prompt(req.body().clone()));
+            });
+        if let Ok(prompt) = with_extensions(prompt).build_as_child(&self.window) {
+            let _ = prompt.focus();
+            self.prompt = Some(prompt);
+        }
+    }
+
+    /// The master password prompt or the login chooser, along the bottom of
+    /// the window.
+    fn open_prompt(&mut self, kind: &str, label: &str, items: &[String]) {
         let items: Vec<String> = items.iter().map(|item| js_string(item)).collect();
         let data = format!(
             "{{\"kind\": {}, \"label\": {}, \"items\": [{}]}}",
@@ -626,27 +723,50 @@ impl Browser {
         let size = self.window.inner_size();
         let height = (((lines * 20 + 4) as f64) * self.window.scale_factor()) as u32;
         let height = height.min(size.height);
-        let proxy = self.proxy.clone();
-        let prompt = WebViewBuilder::new_with_web_context(&mut self.context)
-            .with_html(PROMPT_HTML.replace("{{prompt}}", &data))
-            .with_bounds(tabbar::rect(0, size.height - height, size.width, height))
-            .with_background_color(BACKGROUND)
-            .with_focused(true)
-            .with_ipc_handler(move |req: Request<String>| {
-                let msg = req.body();
-                let event = if let Some(password) = msg.strip_prefix("unlock ") {
-                    UserEvent::PromptUnlock(password.to_string())
-                } else if let Some(i) = msg.strip_prefix("pick ").and_then(|i| i.parse().ok()) {
-                    UserEvent::PromptPick(i)
-                } else {
-                    UserEvent::PromptCancel
-                };
-                let _ = proxy.send_event(event);
-            });
-        if let Ok(prompt) = with_extensions(prompt).build_as_child(&self.window) {
-            let _ = prompt.focus();
-            self.prompt = Some(prompt);
-        }
+        self.open_overlay(
+            PROMPT_HTML.replace("{{prompt}}", &data),
+            tabbar::rect(0, size.height - height, size.width, height),
+        );
+    }
+
+    /// The vault panel: the bottom bar grown to list every login, those for
+    /// this page first.
+    fn open_vault(&mut self, tab: u64, url: String, mut logins: Vec<Login>) {
+        logins.sort_by_cached_key(|login| {
+            (!bitwarden::matches(login, &url), login.name.to_lowercase())
+        });
+        let items: Vec<String> = logins
+            .iter()
+            .map(|login| {
+                format!(
+                    "[{}, {}, {}, {}, {}]",
+                    js_string(&login.name),
+                    js_string(&login.username),
+                    js_string(
+                        &login
+                            .uris
+                            .first()
+                            .map(|u| bitwarden::host(u))
+                            .unwrap_or_default()
+                    ),
+                    bitwarden::matches(login, &url),
+                    login.has_totp
+                )
+            })
+            .collect();
+        let size = self.window.inner_size();
+        let height = ((360.0 * self.window.scale_factor()) as u32).min(size.height / 2);
+        let bounds = tabbar::rect(0, size.height - height, size.width, height);
+        self.pending = Some(Pending {
+            tab,
+            url,
+            logins,
+            vault: true,
+        });
+        self.open_overlay(
+            VAULT_HTML.replace("{{items}}", &format!("[{}]", items.join(", "))),
+            bounds,
+        );
     }
 
     fn close_prompt(&mut self) {
@@ -657,8 +777,32 @@ impl Browser {
         }
     }
 
-    fn prompt_unlock(&mut self, password: String) {
+    /// Handles what the prompt or vault panel sent.
+    fn prompt_message(&mut self, msg: &str) {
+        let (action, arg) = msg.split_once(' ').unwrap_or((msg, ""));
         self.close_prompt();
+        if action == "unlock" {
+            self.prompt_unlock(arg.to_string());
+            return;
+        }
+        let Some(mut pending) = self.pending.take() else {
+            return;
+        };
+        let Some(index) = arg.parse().ok().filter(|&i| i < pending.logins.len()) else {
+            return;
+        };
+        let login = pending.logins.swap_remove(index);
+        match action {
+            "pick" | "fill" => self.fill(pending.tab, &pending.url, login),
+            "copy-user" => self.copy(pending.tab, login.username, "username"),
+            "copy-pass" => self.copy(pending.tab, login.password, "password"),
+            "copy-totp" if login.has_totp => self.copy_totp(pending.tab, login.id),
+            "copy-totp" => self.flash(pending.tab, "That login has no one-time code"),
+            _ => {}
+        }
+    }
+
+    fn prompt_unlock(&mut self, password: String) {
         let Some(pending) = &self.pending else {
             return;
         };
@@ -677,16 +821,7 @@ impl Browser {
             Ok(session) => {
                 self.bitwarden_session = Some(session);
                 // Look the logins up again, now that the vault is open.
-                let proxy = self.proxy.clone();
-                let session = self.bitwarden_session.clone();
-                thread::spawn(move || {
-                    let result = bitwarden::logins(&pending.url, session.as_deref());
-                    let _ = proxy.send_event(UserEvent::BitwardenLogins(
-                        pending.tab,
-                        pending.url,
-                        result,
-                    ));
-                });
+                self.lookup(pending.tab, pending.url, pending.vault);
             }
             Err(bitwarden::Error::Locked) => self.flash(pending.tab, "Bitwarden is still locked"),
             Err(bitwarden::Error::Failed(err)) => {
@@ -695,18 +830,9 @@ impl Browser {
         }
     }
 
-    fn prompt_pick(&mut self, index: usize) {
-        self.close_prompt();
-        if let Some(mut pending) = self.pending.take()
-            && index < pending.logins.len()
-        {
-            let login = pending.logins.swap_remove(index);
-            self.fill(pending.tab, &pending.url, login);
-        }
-    }
-
     fn bitwarden_lock(&mut self) {
         self.bitwarden_session = None;
+        self.vault = None;
         let tab = self.tabs[self.current].id;
         self.flash(tab, "Bitwarden locked");
         thread::spawn(bitwarden::lock);
@@ -806,7 +932,8 @@ impl Browser {
                     set_password_saving(&tab.webview, on);
                 }
             }
-            Command::Bitwarden => self.bitwarden(),
+            Command::Bitwarden => self.bitwarden(false),
+            Command::BitwardenVault => self.bitwarden(true),
             Command::BitwardenLock => self.bitwarden_lock(),
             Command::SetTabsShow(show) => {
                 self.settings.tabs_show = show;
@@ -895,6 +1022,8 @@ fn main() -> wry::Result<()> {
         extensions_dir,
         extension_status: String::new(),
         bitwarden_session: None,
+        vault: None,
+        refreshing: false,
         pending: None,
         prompt: None,
     };
@@ -1020,8 +1149,8 @@ fn main() -> wry::Result<()> {
                 browser.refresh_extensions();
                 true
             }
-            Event::UserEvent(UserEvent::BitwardenLogins(tab, url, result)) => {
-                browser.bitwarden_logins(tab, url, result);
+            Event::UserEvent(UserEvent::BitwardenLogins(tab, url, vault, result)) => {
+                browser.bitwarden_logins(tab, url, vault, result);
                 true
             }
             Event::UserEvent(UserEvent::BitwardenUnlocked(result)) => {
@@ -1032,17 +1161,19 @@ fn main() -> wry::Result<()> {
                 browser.flash(tab, &text);
                 true
             }
-            Event::UserEvent(UserEvent::PromptUnlock(password)) => {
-                browser.prompt_unlock(password);
+            Event::UserEvent(UserEvent::VaultRefreshed(result)) => {
+                browser.refreshing = false;
+                match result {
+                    // Unless it was locked meanwhile.
+                    Ok(logins) if browser.vault.is_some() => browser.vault = Some(logins),
+                    Ok(_) => {}
+                    Err(bitwarden::Error::Locked) => browser.vault = None,
+                    Err(_) => {}
+                }
                 true
             }
-            Event::UserEvent(UserEvent::PromptPick(index)) => {
-                browser.prompt_pick(index);
-                true
-            }
-            Event::UserEvent(UserEvent::PromptCancel) => {
-                browser.pending = None;
-                browser.close_prompt();
+            Event::UserEvent(UserEvent::Prompt(msg)) => {
+                browser.prompt_message(&msg);
                 true
             }
             Event::UserEvent(UserEvent::Title(id, title)) => {

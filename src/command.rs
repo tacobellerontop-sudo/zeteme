@@ -29,6 +29,8 @@ pub enum Command {
     InstallUpdate,
     /// Fills the page's login form from Bitwarden.
     Bitwarden,
+    /// Opens the Bitwarden vault panel.
+    BitwardenVault,
     BitwardenLock,
     /// Opens the popup of the extension whose name contains this.
     Extension(String),
@@ -89,6 +91,7 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
         "update-check" => Command::CheckUpdate,
         "update-install" => Command::InstallUpdate,
         "bitwarden" if arg == "lock" => Command::BitwardenLock,
+        "bitwarden" if arg == "vault" => Command::BitwardenVault,
         "bitwarden" if arg.is_empty() => Command::Bitwarden,
         "ext" => Command::Extension(arg.to_string()),
         "ext-install" if !arg.is_empty() => Command::ExtensionInstall(arg.to_string()),
@@ -243,6 +246,7 @@ mod tests {
         assert!(!parse_ipc("ext bitwarden").unwrap().settings_only());
         assert_eq!(parse_ipc("bitwarden"), Some(Command::Bitwarden));
         assert_eq!(parse_ipc("bitwarden lock"), Some(Command::BitwardenLock));
+        assert_eq!(parse_ipc("bitwarden vault"), Some(Command::BitwardenVault));
         assert_eq!(parse_ipc("bitwarden bogus"), None);
         assert!(!Command::Bitwarden.settings_only());
         assert!(parse_ipc("set save_passwords off").unwrap().settings_only());
