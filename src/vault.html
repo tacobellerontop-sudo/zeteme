@@ -83,7 +83,15 @@
       if (user) button("user", "copy-user");
       button("password", "copy-pass");
       if (code) button("code", "copy-totp");
-      li.addEventListener("mousedown", () => { sel = n; render(); });
+      // Selecting by mouse only moves the highlight: rebuilding the rows here
+      // would remove the button being clicked before its click lands.
+      li.addEventListener("mousedown", (e) => {
+        sel = n;
+        for (const row of $("list").querySelectorAll(".sel")) row.classList.remove("sel");
+        li.classList.add("sel");
+        if (e.target.tagName !== "BUTTON") e.preventDefault();
+        $("search").focus();
+      });
       li.addEventListener("dblclick", () => act("fill", i));
       rows.push(li);
     });

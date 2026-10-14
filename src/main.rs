@@ -59,6 +59,8 @@ enum UserEvent {
     /// Logins for the tab and page, and whether they are for the vault panel.
     BitwardenLogins(u64, String, bool, Result<Vec<Login>, bitwarden::Error>),
     BitwardenUnlocked(Result<String, bitwarden::Error>),
+    /// The whole vault, re-read in the background.
+    VaultRefreshed(Result<Vec<Login>, bitwarden::Error>),
     Flash(u64, String),
     /// A message from the Bitwarden prompt or vault panel.
     Prompt(String),
@@ -106,6 +108,10 @@ struct Browser {
     extension_status: String,
     /// The unlocked Bitwarden session key, kept only while zeteme runs.
     bitwarden_session: Option<String>,
+    /// Every login, read once after unlocking: running `bw` takes a second
+    /// or more, so lookups use this and refresh it in the background.
+    vault: Option<Vec<Login>>,
+    refreshing: bool,
     pending: Option<Pending>,
     prompt: Option<WebView>,
 }
@@ -545,16 +551,37 @@ impl Browser {
             self.flash(id, "Bitwarden fills web pages only");
             return;
         }
-        self.lookup(id, url, vault);
+        match self.vault.clone() {
+            Some(logins) => {
+                self.bitwarden_logins(id, url, vault, Ok(logins));
+                self.refresh_vault();
+            }
+            None => self.lookup(id, url, vault),
+        }
     }
 
+    /// Reads the whole vault, then carries on with the tab and page.
     fn lookup(&self, tab: u64, url: String, vault: bool) {
         let session = self.bitwarden_session.clone();
         let proxy = self.proxy.clone();
         thread::spawn(move || {
-            let filter = (!vault).then_some(url.as_str());
-            let result = bitwarden::logins(filter, session.as_deref());
+            let result = bitwarden::logins(None, session.as_deref());
             let _ = proxy.send_event(UserEvent::BitwardenLogins(tab, url, vault, result));
+        });
+    }
+
+    /// Re-reads the vault in the background, so logins added elsewhere show
+    /// up on the next lookup.
+    fn refresh_vault(&mut self) {
+        if self.refreshing {
+            return;
+        }
+        self.refreshing = true;
+        let session = self.bitwarden_session.clone();
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let result = bitwarden::logins(None, session.as_deref());
+            let _ = proxy.send_event(UserEvent::VaultRefreshed(result));
         });
     }
 
@@ -565,6 +592,21 @@ impl Browser {
         vault: bool,
         result: Result<Vec<Login>, bitwarden::Error>,
     ) {
+        if let Ok(logins) = &result {
+            self.vault = Some(logins.clone());
+        }
+        let result = result.map(|logins| {
+            if vault {
+                logins
+            } else {
+                let mut here: Vec<Login> = logins
+                    .into_iter()
+                    .filter(|login| bitwarden::matches(login, &url))
+                    .collect();
+                here.sort_by_cached_key(|login| login.name.to_lowercase());
+                here
+            }
+        });
         match result {
             Ok(logins) if vault => self.open_vault(tab, url, logins),
             Ok(logins) if logins.is_empty() => self.flash(tab, "No Bitwarden login for this site"),
@@ -588,6 +630,7 @@ impl Browser {
             }
             Err(bitwarden::Error::Locked) => {
                 self.bitwarden_session = None;
+                self.vault = None;
                 self.pending = Some(Pending {
                     tab,
                     url,
@@ -789,6 +832,7 @@ impl Browser {
 
     fn bitwarden_lock(&mut self) {
         self.bitwarden_session = None;
+        self.vault = None;
         let tab = self.tabs[self.current].id;
         self.flash(tab, "Bitwarden locked");
         thread::spawn(bitwarden::lock);
@@ -978,6 +1022,8 @@ fn main() -> wry::Result<()> {
         extensions_dir,
         extension_status: String::new(),
         bitwarden_session: None,
+        vault: None,
+        refreshing: false,
         pending: None,
         prompt: None,
     };
@@ -1113,6 +1159,17 @@ fn main() -> wry::Result<()> {
             }
             Event::UserEvent(UserEvent::Flash(tab, text)) => {
                 browser.flash(tab, &text);
+                true
+            }
+            Event::UserEvent(UserEvent::VaultRefreshed(result)) => {
+                browser.refreshing = false;
+                match result {
+                    // Unless it was locked meanwhile.
+                    Ok(logins) if browser.vault.is_some() => browser.vault = Some(logins),
+                    Ok(_) => {}
+                    Err(bitwarden::Error::Locked) => browser.vault = None,
+                    Err(_) => {}
+                }
                 true
             }
             Event::UserEvent(UserEvent::Prompt(msg)) => {
