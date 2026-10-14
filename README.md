@@ -94,7 +94,7 @@ Keys work the same when an embedded player or other frame has focus.
 
 Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`), `:close`,
 `:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:ext <name>`,
-`:bw` / `:bw lock`, `:quit` (`:q`).
+`:bw` / `:bw fill` / `:bw lock`, `:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
@@ -116,10 +116,15 @@ turns it off.
 
 To fill logins from Bitwarden, like qutebrowser's `qute-bitwarden`, install
 the [Bitwarden CLI](https://bitwarden.com/help/cli/) so `bw` is on your
-PATH and run `bw login` once. Then press `Ctrl-Shift-L` (or type `:bw`) on a
+PATH and run `bw login` once. Then press `Ctrl-Shift-L` (or type `:bw fill`) on a
 login page: zeteme asks for your master password the first time, fills the
 username and password of the login saved for the site (or lets you pick one
-with its number), and copies its one-time code, if it has one. The vault
+with its number), and copies its one-time code, if it has one.
+
+`:bw` opens the vault instead: the bottom bar grows into a list of your
+logins, this site's first. Type to search, move with the arrow keys or the
+mouse, and press `Enter` to fill the selected login, `Ctrl-U` / `Ctrl-P` /
+`Ctrl-O` to copy its username, password or one-time code, or `Esc` to close. The vault
 stays unlocked until zeteme closes or you type `:bw lock`. The prompt is a
 separate view of zeteme's own, so the page can't read what you type into it.
 

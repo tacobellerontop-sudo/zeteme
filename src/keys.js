@@ -119,7 +119,8 @@
       case "close": send("close"); break;
       case "q": case "quit": send("quit"); break;
       case "set": case "settings": send("settings"); break;
-      case "bw": case "bitwarden": send(arg === "lock" ? "bitwarden lock" : "bitwarden"); break;
+      case "bw": case "bitwarden":
+        send({ lock: "bitwarden lock", fill: "bitwarden" }[arg] || "bitwarden vault"); break;
       case "ext": case "extension": send(`ext ${arg}`); break;
       case "back": history.back(); break;
       case "forward": history.forward(); break;

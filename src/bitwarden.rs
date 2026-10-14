@@ -18,6 +18,8 @@ pub struct Login {
     pub username: String,
     pub password: String,
     pub has_totp: bool,
+    /// The sites the login is saved for.
+    pub uris: Vec<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -103,11 +105,15 @@ pub fn lock() {
     let _ = run(&["lock"], None, None);
 }
 
-/// The logins saved for `url`.
-pub fn logins(url: &str, session: Option<&str>) -> Result<Vec<Login>, Error> {
+/// The logins saved for `url`, or every login without one.
+pub fn logins(url: Option<&str>, session: Option<&str>) -> Result<Vec<Login>, Error> {
     // Without a key of our own, a BW_SESSION from the environment may still
     // unlock the vault; with neither, bw reports it is locked.
-    let output = run(&["list", "items", "--url", url], session, None)?;
+    let mut args = vec!["list", "items"];
+    if let Some(url) = url {
+        args.extend(["--url", url]);
+    }
+    let output = run(&args, session, None)?;
     parse_logins(&output).ok_or_else(|| Error::Failed("could not read bw's output".into()))
 }
 
@@ -129,6 +135,13 @@ fn parse_logins(output: &str) -> Option<Vec<Login>> {
                     username: text(login.get("username")),
                     password: text(login.get("password")),
                     has_totp: login.get("totp").as_str().is_some_and(|t| !t.is_empty()),
+                    uris: login
+                        .get("uris")
+                        .as_array()
+                        .iter()
+                        .filter_map(|uri| uri.get("uri").as_str())
+                        .map(str::to_string)
+                        .collect(),
                 })
             })
             .collect(),
@@ -170,6 +183,31 @@ pub fn origin(url: &str) -> &str {
     &url[..end]
 }
 
+/// The host of `url` without "www.", or of a bare "example.com".
+pub fn host(url: &str) -> String {
+    let rest = url.find("://").map_or(url, |i| &url[i + 3..]);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = host.split(':').next().unwrap_or("").to_lowercase();
+    host.strip_prefix("www.")
+        .map(str::to_string)
+        .unwrap_or(host)
+}
+
+/// Whether `login` is saved for the site at `url`, or a site above or below
+/// it (accounts.example.com and example.com).
+pub fn matches(login: &Login, url: &str) -> bool {
+    let page = host(url);
+    !page.is_empty()
+        && login.uris.iter().any(|uri| {
+            let saved = host(uri);
+            !saved.is_empty()
+                && (saved == page
+                    || page.ends_with(&format!(".{saved}"))
+                    || saved.ends_with(&format!(".{page}")))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +230,27 @@ mod tests {
         assert!(!logins[1].has_totp);
         assert_eq!(parse_logins("[]"), Some(vec![]));
         assert_eq!(parse_logins("? Master password"), None);
+    }
+
+    #[test]
+    fn matches_sites() {
+        let login = Login {
+            id: String::new(),
+            name: String::new(),
+            username: String::new(),
+            password: String::new(),
+            has_totp: false,
+            uris: vec![
+                "https://www.example.com/login".into(),
+                "androidapp://x".into(),
+            ],
+        };
+        assert!(matches(&login, "https://example.com/"));
+        assert!(matches(&login, "https://accounts.example.com/signin"));
+        assert!(!matches(&login, "https://notexample.com/"));
+        assert!(!matches(&login, "https://example.org/"));
+        assert_eq!(host("example.com"), "example.com");
+        assert_eq!(host("https://u@WWW.Example.com:8080/x"), "example.com");
     }
 
     #[test]
