@@ -2,6 +2,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod bitwarden;
+mod bookmarks;
 mod command;
 mod downloads;
 mod extensions;
@@ -22,12 +23,13 @@ use std::{
 };
 
 use bitwarden::Login;
-use command::{Command, DownloadAction, normalize_url, parse_ipc};
+use bookmarks::Bookmarks;
+use command::{Command, DownloadAction, OpenMode, normalize_url, parse_ipc};
 use downloads::{Download, Downloads};
 use extensions::{Extension, Index, Page};
 use geometry::Geometry;
 use history::History;
-use settings::{DOWNLOADS_URL, HISTORY_URL, SETTINGS_URL, Settings, js_string};
+use settings::{BOOKMARKS_URL, DOWNLOADS_URL, HISTORY_URL, SETTINGS_URL, Settings, js_string};
 use tabbar::{Button, Extent, Show};
 use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
@@ -58,6 +60,10 @@ const KEYS_JS: &str = include_str!("keys.js");
 const PROMPT_HTML: &str = include_str!("prompt.html");
 /// The Bitwarden vault panel `:bw` opens.
 const VAULT_HTML: &str = include_str!("vault.html");
+/// The address bar `o` opens.
+const OPEN_BAR_HTML: &str = include_str!("openbar.html");
+/// Pages from the history the address bar suggests from, at most.
+const SUGGESTED: usize = 2000;
 
 enum UserEvent {
     Command(Command),
@@ -141,6 +147,7 @@ struct Browser {
     pending: Option<Pending>,
     prompt: Option<WebView>,
     history: History,
+    bookmarks: Bookmarks,
     downloads: Downloads,
     /// When download progress was last shown, so it is shown a few times a
     /// second rather than for every chunk.
@@ -237,6 +244,7 @@ fn build_tab_bar(
                 UserEvent::Command(match button {
                     Button::Downloads => Command::Downloads,
                     Button::History => Command::History,
+                    Button::Bookmarks => Command::Bookmarks,
                     Button::NewTab => Command::NewTab,
                     Button::Bitwarden => Command::BitwardenVault,
                     Button::Settings => Command::Settings,
@@ -346,6 +354,7 @@ impl Browser {
                     Some("start") => settings::start_page().to_string(),
                     Some("history") => history::PAGE.to_string(),
                     Some("downloads") => downloads::PAGE.to_string(),
+                    Some("bookmarks") => bookmarks::PAGE.to_string(),
                     _ => settings::page(&Settings::load(&settings_file)),
                 };
                 Response::builder()
@@ -1036,6 +1045,83 @@ impl Browser {
         );
     }
 
+    /// The address bar, along the bottom of the window like the command bar
+    /// it stands in for, with bookmarks and the most visited pages to pick.
+    fn open_bar(&mut self, mode: OpenMode) {
+        let mut items: Vec<String> = self
+            .bookmarks
+            .list
+            .iter()
+            .rev()
+            .map(|b| format!("[{}, {}, true]", js_string(&b.url), js_string(&b.title)))
+            .collect();
+        items.extend(
+            self.history
+                .ranked(SUGGESTED)
+                .into_iter()
+                .filter(|(url, _)| !self.bookmarks.contains(url))
+                .map(|(url, title)| format!("[{}, {}, false]", js_string(url), js_string(title))),
+        );
+        let text = match mode {
+            OpenMode::Edit => self.tabs[self.current].webview.url().unwrap_or_default(),
+            _ => String::new(),
+        };
+        let data = format!(
+            "{{\"mode\": {}, \"text\": {}, \"items\": [{}]}}",
+            js_string(if mode == OpenMode::NewTab {
+                "tabopen"
+            } else {
+                "open"
+            }),
+            js_string(&text),
+            items.join(", ")
+        );
+        let lines = 1 + items.len().min(10) as u32;
+        let size = self.window.inner_size();
+        let height = (((lines * 20 + 4) as f64) * self.window.scale_factor()) as u32;
+        let height = height.min(size.height);
+        self.open_overlay(
+            OPEN_BAR_HTML.replace("{{data}}", &data),
+            tabbar::rect(0, size.height - height, size.width, height),
+        );
+    }
+
+    /// `M`: bookmarks the current page, or removes its bookmark.
+    fn toggle_bookmark(&mut self) {
+        let tab = &self.tabs[self.current];
+        let (id, url) = (tab.id, tab.webview.url().unwrap_or_default());
+        if !history::worth_keeping(&url) {
+            self.flash(id, "Only web pages can be bookmarked");
+            return;
+        }
+        let title = tab.title.clone();
+        let note = if self.bookmarks.toggle(&url, &title) {
+            "Bookmarked (:bookmarks)"
+        } else {
+            "Removed the bookmark"
+        };
+        self.flash(id, note);
+        self.show_bookmarks();
+    }
+
+    /// Lists the bookmarks on any open bookmarks page, newest first.
+    fn show_bookmarks(&self) {
+        let rows: Vec<String> = self
+            .bookmarks
+            .list
+            .iter()
+            .rev()
+            .map(|b| format!("[{}, {}]", js_string(&b.url), js_string(&b.title)))
+            .collect();
+        self.eval_page(
+            BOOKMARKS_URL,
+            &format!(
+                "window.zetemeBookmarks && zetemeBookmarks([{}])",
+                rows.join(",")
+            ),
+        );
+    }
+
     fn close_prompt(&mut self) {
         if self.prompt.take().is_some()
             && let Some(tab) = self.tabs.get(self.current)
@@ -1048,9 +1134,20 @@ impl Browser {
     fn prompt_message(&mut self, msg: &str) {
         let (action, arg) = msg.split_once(' ').unwrap_or((msg, ""));
         self.close_prompt();
-        if action == "unlock" {
-            self.prompt_unlock(arg.to_string());
-            return;
+        match action {
+            "unlock" => {
+                self.prompt_unlock(arg.to_string());
+                return;
+            }
+            "go-open" => {
+                self.run(Command::Open(normalize_url(arg)));
+                return;
+            }
+            "go-tabopen" => {
+                self.run(Command::TabOpen(normalize_url(arg)));
+                return;
+            }
+            _ => {}
         }
         let Some(mut pending) = self.pending.take() else {
             return;
@@ -1256,6 +1353,11 @@ impl Browser {
                 self.settings.save(&self.settings_file);
                 self.draw_tab_bar();
             }
+            Command::OpenBar(mode) => self.open_bar(mode),
+            Command::Bookmark => self.toggle_bookmark(),
+            Command::Bookmarks => self.open_page(BOOKMARKS_URL),
+            Command::BookmarksReady => self.show_bookmarks(),
+            Command::BookmarkDelete(url) => self.bookmarks.remove(&url),
             Command::Downloads => {
                 self.open_page(DOWNLOADS_URL);
                 self.downloads.unseen = false;
@@ -1287,6 +1389,7 @@ fn main() -> wry::Result<()> {
     let _ = fs::create_dir_all(&extensions_dir);
     let history = History::load(&data_dir.join("history.txt"));
     let downloads = Downloads::load(&data_dir.join("downloads.txt"));
+    let bookmarks = Bookmarks::load(&data_dir.join("bookmarks.txt"));
     let settings = Settings::load(&settings_file);
 
     // Restore the last session, then open any URL given on the command line.
@@ -1370,6 +1473,7 @@ fn main() -> wry::Result<()> {
         pending: None,
         prompt: None,
         history,
+        bookmarks,
         downloads,
         downloads_shown: Cell::new(Instant::now()),
         quit_warned: false,

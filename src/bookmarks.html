@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bookmarks</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 32px 40px; background: #1e1e1e; color: #ddd;
+         font: 14px/1.5 "Segoe UI", sans-serif; }
+  main { max-width: 860px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 auto 0 0; }
+  input { font: inherit; color: #fff; background: #2a2a2a; border: 1px solid #444;
+          border-radius: 3px; padding: 4px 10px; width: 320px; outline: none; }
+  input:focus { border-color: #50dcaa; }
+  button { font: inherit; color: #fff; background: #333; border: 1px solid #555;
+           border-radius: 3px; padding: 3px 12px; cursor: pointer; }
+  button:hover { background: #3c3c3c; }
+  h2 { font-size: 13px; font-weight: 600; color: #888; margin: 20px 0 4px;
+       text-transform: uppercase; letter-spacing: 0.5px; }
+  .visit { display: flex; align-items: center; gap: 12px; padding: 2px 6px; border-radius: 3px; }
+  .visit:hover { background: #2a2a2a; }
+  time { color: #777; font: 12px Consolas, monospace; flex: none; }
+  a { color: #ddd; text-decoration: none; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; min-width: 0; }
+  a:hover { color: #fff; text-decoration: underline; }
+  .host { color: #777; font-size: 12px; white-space: nowrap; margin-right: auto; }
+  .visit button { visibility: hidden; padding: 0 6px; border: 0; background: none; color: #888; }
+  .visit:hover button { visibility: visible; }
+  .visit button:hover { color: #fff; }
+  .note { color: #888; }
+  kbd { font: 13px Consolas, monospace; color: #50dcaa; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Bookmarks</h1>
+    <input id="q" spellcheck="false" autocomplete="off" placeholder="Search bookmarks (gi)">
+  </header>
+  <div id="list"></div>
+</main>
+<script>
+  const send = (msg) => window.ipc.postMessage(msg);
+  const $ = (id) => document.getElementById(id);
+  const host = (url) => { try { return new URL(url).host; } catch { return ""; } };
+  let all = [];
+
+  function render() {
+    const words = $("q").value.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = all.filter(([url, title]) => words.every((w) => `${url} ${title}`.toLowerCase().includes(w)))
+      .map(([url, title]) => {
+        const row = document.createElement("div");
+        row.className = "visit";
+        const link = document.createElement("a");
+        link.href = url;
+        link.textContent = title || url;
+        link.title = url;
+        const site = document.createElement("span");
+        site.className = "host";
+        site.textContent = host(url);
+        const remove = document.createElement("button");
+        remove.textContent = "\u00d7";
+        remove.title = "Remove bookmark";
+        remove.addEventListener("click", () => {
+          send(`bookmark-delete ${url}`);
+          all = all.filter(([u]) => u !== url);
+          row.remove();
+        });
+        row.append(link, site, remove);
+        return row;
+      });
+    if (!rows.length) {
+      const none = document.createElement("p");
+      none.className = "note";
+      none.append(all.length ? "No bookmark matches." : "No bookmarks yet. Press ");
+      if (!all.length) {
+        const key = document.createElement("kbd");
+        key.textContent = "M";
+        none.append(key, " on a page to bookmark it, and again to remove it.");
+      }
+      rows.push(none);
+    }
+    $("list").replaceChildren(...rows);
+  }
+
+  // Called by zeteme with every [url, title] bookmark, newest first.
+  window.zetemeBookmarks = (list) => { all = list; render(); };
+  $("q").addEventListener("input", render);
+  send("bookmarks-ready");
+</script>
+</body>
+</html>

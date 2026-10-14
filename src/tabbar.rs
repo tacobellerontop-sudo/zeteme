@@ -43,15 +43,17 @@ pub enum Position {
 pub enum Button {
     Downloads,
     History,
+    Bookmarks,
     NewTab,
     Bitwarden,
     Settings,
 }
 
 impl Button {
-    pub const ALL: [Button; 5] = [
+    pub const ALL: [Button; 6] = [
         Button::Downloads,
         Button::History,
+        Button::Bookmarks,
         Button::NewTab,
         Button::Bitwarden,
         Button::Settings,
@@ -65,6 +67,7 @@ impl Button {
         match self {
             Button::Downloads => "downloads",
             Button::History => "history",
+            Button::Bookmarks => "bookmarks",
             Button::NewTab => "newtab",
             Button::Bitwarden => "bitwarden",
             Button::Settings => "settings",
