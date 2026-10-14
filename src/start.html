@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Start page</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; }
+  body { margin: 0; display: flex; flex-direction: column; align-items: center;
+         justify-content: center; background: #1e1e1e; color: #ddd;
+         font: 14px/1.5 "Segoe UI", sans-serif; }
+  main { width: min(560px, 100% - 64px); margin-top: -8vh; }
+  header { display: flex; align-items: center; justify-content: center; gap: 16px;
+           margin-bottom: 28px; }
+  header svg { width: 64px; height: 64px; }
+  h1 { margin: 0; font: 600 34px/1 Consolas, monospace; color: #fff; letter-spacing: 1px; }
+  form { display: flex; }
+  input { flex: 1; font: 16px Consolas, monospace; color: #fff; background: #2a2a2a;
+          border: 1px solid #444; border-radius: 4px; padding: 10px 14px; outline: none; }
+  input:focus { border-color: #50dcaa; }
+  input::placeholder { color: #777; }
+  dl { display: grid; grid-template-columns: repeat(2, auto auto); gap: 6px 12px;
+       width: fit-content; margin: 28px auto 0; color: #999; }
+  dt { text-align: right; }
+  dd { margin: 0 36px 0 0; }
+  kbd { font: 13px Consolas, monospace; color: #50dcaa; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <rect x="32" y="32" width="960" height="960" rx="200" fill="#2a2a2a"/>
+      <polygon fill="#50dcaa" points="212,250 662,250 662,380 374.5,640 662,640 662,770 212,770 212,640 499.5,380 212,380"/>
+      <rect x="722" y="640" width="110" height="130" fill="#e6e6e6"/>
+    </svg>
+    <h1>zeteme</h1>
+  </header>
+  <form id="search">
+    <input id="q" spellcheck="false" autocomplete="off"
+           placeholder="Search DuckDuckGo or type a URL (gi)">
+  </form>
+  <dl>
+    <dt><kbd>o</kbd></dt><dd>open</dd>
+    <dt><kbd>O</kbd></dt><dd>open in a new tab</dd>
+    <dt><kbd>f</kbd></dt><dd>follow a link</dd>
+    <dt><kbd>J</kbd> <kbd>K</kbd></dt><dd>next / previous tab</dd>
+    <dt><kbd>d</kbd></dt><dd>close tab</dd>
+    <dt><kbd>u</kbd></dt><dd>reopen closed tab</dd>
+    <dt><kbd>/</kbd></dt><dd>find on page</dd>
+    <dt><kbd>:settings</kbd></dt><dd>settings</dd>
+  </dl>
+</main>
+<script>
+  // zeteme turns what was typed into a URL or a search, as the o key does.
+  document.getElementById("search").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = document.getElementById("q").value.trim();
+    if (q) window.ipc.postMessage(`open ${q}`);
+  });
+</script>
+</body>
+</html>

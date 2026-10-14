@@ -1,6 +1,6 @@
 [package]
 name = "zeteme"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "A minimal, keyboard-driven web browser for Windows, in the spirit of qutebrowser"
 repository = "https://github.com/tacobellerontop-sudo/zeteme"
@@ -16,6 +16,10 @@ wry = "0.57"
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
 windows-core = "0.62"
+
+# Puts the icon and version details into zeteme.exe.
+[build-dependencies]
+embed-resource = "3"
 
 # Small, fast release binary: the browser engine is the system's WebView2,
 # so the executable itself only carries zeteme's own code.
