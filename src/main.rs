@@ -22,7 +22,7 @@ use bitwarden::Login;
 use command::{Command, normalize_url, parse_ipc};
 use extensions::{Extension, Index, Page};
 use geometry::Geometry;
-use settings::{SETTINGS_URL, START_URL, Settings, js_string};
+use settings::{SETTINGS_URL, Settings, js_string};
 use tabbar::{Extent, Show};
 use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
@@ -306,7 +306,9 @@ impl Browser {
             .with_initialization_script(KEYS_JS)
             .with_background_color(BACKGROUND)
             .with_custom_protocol("zeteme".into(), move |_, req| {
-                let page = if req.uri().to_string().starts_with(START_URL) {
+                // wry hands over zeteme://start/ here even where the page's
+                // own address is http://zeteme.start/ (Windows).
+                let page = if req.uri().host() == Some("start") {
                     settings::start_page().to_string()
                 } else {
                     settings::page(&Settings::load(&settings_file))
