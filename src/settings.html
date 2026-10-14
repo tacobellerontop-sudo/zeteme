@@ -44,10 +44,11 @@
       <option value="duckduckgo">DuckDuckGo</option>
       <option value="blank">blank page</option>
     </select></label>
-  <label><input type="checkbox" id="restore_tabs" {{restore_tabs}}>
+  <label><input type="checkbox" id="reopen_tabs" {{reopen_tabs}}>
     Reopen the tabs from last time</label>
-  <p class="note">The start page opens when zeteme starts with no tabs to reopen,
-    and in new tabs (<code>O</code> then Enter, or <code>:tabopen</code>).</p>
+  <p class="note">zeteme starts on the start page, and new tabs (<code>O</code> then
+    Enter, or <code>:tabopen</code>) open it too. With the tabs from last time
+    reopened, it shows only when there are none.</p>
 </section>
 <section>
   <h2>Updates</h2>
@@ -106,7 +107,7 @@
     $(id).value = value;
     $(id).addEventListener("change", (e) => send(`set ${id} ${e.target.value}`));
   }
-  $("restore_tabs").addEventListener("change", (e) => send(`set restore_tabs ${e.target.checked ? "on" : "off"}`));
+  $("reopen_tabs").addEventListener("change", (e) => send(`set reopen_tabs ${e.target.checked ? "on" : "off"}`));
   $("save_passwords").addEventListener("change", (e) => send(`set save_passwords ${e.target.checked ? "on" : "off"}`));
   $("check").addEventListener("click", () => send("update-check"));
   $("install").addEventListener("click", () => send("update-install"));

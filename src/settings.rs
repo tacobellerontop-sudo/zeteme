@@ -69,7 +69,7 @@ pub struct Settings {
     pub tabs_position: Position,
     pub start_page: StartPage,
     /// Reopen the tabs that were open when zeteme last closed.
-    pub restore_tabs: bool,
+    pub reopen_tabs: bool,
 }
 
 impl Default for Settings {
@@ -80,7 +80,7 @@ impl Default for Settings {
             tabs_show: Show::Auto,
             tabs_position: Position::Top,
             start_page: StartPage::Zeteme,
-            restore_tabs: true,
+            reopen_tabs: false,
         }
     }
 }
@@ -110,7 +110,7 @@ impl Settings {
                 "start_page" => {
                     settings.start_page = StartPage::parse(value).unwrap_or(settings.start_page)
                 }
-                "restore_tabs" => settings.restore_tabs = value != "false",
+                "reopen_tabs" => settings.reopen_tabs = value == "true",
                 _ => {}
             }
         }
@@ -122,13 +122,13 @@ impl Settings {
             file,
             format!(
                 "check_updates={}\nsave_passwords={}\ntabs_show={}\ntabs_position={}\n\
-                 start_page={}\nrestore_tabs={}\n",
+                 start_page={}\nreopen_tabs={}\n",
                 self.check_updates,
                 self.save_passwords,
                 self.tabs_show.as_str(),
                 self.tabs_position.as_str(),
                 self.start_page.as_str(),
-                self.restore_tabs
+                self.reopen_tabs
             ),
         );
     }
@@ -158,8 +158,8 @@ pub fn page(settings: &Settings) -> String {
         .replace("{{tabs_position}}", settings.tabs_position.as_str())
         .replace("{{start_page}}", settings.start_page.as_str())
         .replace(
-            "{{restore_tabs}}",
-            if settings.restore_tabs { "checked" } else { "" },
+            "{{reopen_tabs}}",
+            if settings.reopen_tabs { "checked" } else { "" },
         )
 }
 
@@ -253,8 +253,8 @@ mod tests {
             Settings::parse("start_page=blank").start_page,
             StartPage::Blank
         );
-        assert!(Settings::parse("").restore_tabs);
-        assert!(!Settings::parse("restore_tabs=false").restore_tabs);
+        assert!(!Settings::parse("").reopen_tabs);
+        assert!(Settings::parse("reopen_tabs=true").reopen_tabs);
     }
 
     #[test]
@@ -263,7 +263,7 @@ mod tests {
             check_updates: false,
             tabs_show: Show::Hover,
             start_page: StartPage::DuckDuckGo,
-            restore_tabs: false,
+            reopen_tabs: true,
             ..Settings::default()
         };
         let file = std::env::temp_dir().join(format!("zeteme-test-{}.txt", std::process::id()));

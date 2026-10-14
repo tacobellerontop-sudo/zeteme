@@ -1014,8 +1014,8 @@ impl Browser {
                 self.settings.start_page = page;
                 self.settings.save(&self.settings_file);
             }
-            Command::SetRestoreTabs(on) => {
-                self.settings.restore_tabs = on;
+            Command::SetReopenTabs(on) => {
+                self.settings.reopen_tabs = on;
                 self.settings.save(&self.settings_file);
             }
             Command::CheckUpdate => self.check_for_update(),
@@ -1046,7 +1046,7 @@ fn main() -> wry::Result<()> {
     // Restore the last session, then open any URL given on the command line.
     // After an update the tabs always come back, as if zeteme never closed.
     let updated = fs::remove_file(updated_marker(&data_dir)).is_ok();
-    let mut urls: Vec<String> = if settings.restore_tabs || updated {
+    let mut urls: Vec<String> = if settings.reopen_tabs || updated {
         fs::read_to_string(&session_file)
             .unwrap_or_default()
             .lines()

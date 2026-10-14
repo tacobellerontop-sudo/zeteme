@@ -29,7 +29,7 @@ pub enum Command {
     SetTabsShow(Show),
     SetTabsPosition(Position),
     SetStartPage(StartPage),
-    SetRestoreTabs(bool),
+    SetReopenTabs(bool),
     CheckUpdate,
     InstallUpdate,
     /// Fills the page's login form from Bitwarden.
@@ -58,7 +58,7 @@ impl Command {
                 | Command::SetTabsShow(_)
                 | Command::SetTabsPosition(_)
                 | Command::SetStartPage(_)
-                | Command::SetRestoreTabs(_)
+                | Command::SetReopenTabs(_)
                 | Command::CheckUpdate
                 | Command::InstallUpdate
                 | Command::ExtensionInstall(_)
@@ -95,8 +95,8 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
             ("tabs_show", value) => Command::SetTabsShow(Show::parse(value)?),
             ("tabs_position", value) => Command::SetTabsPosition(Position::parse(value)?),
             ("start_page", value) => Command::SetStartPage(StartPage::parse(value)?),
-            ("restore_tabs", "on") => Command::SetRestoreTabs(true),
-            ("restore_tabs", "off") => Command::SetRestoreTabs(false),
+            ("reopen_tabs", "on") => Command::SetReopenTabs(true),
+            ("reopen_tabs", "off") => Command::SetReopenTabs(false),
             _ => return None,
         },
         "update-check" => Command::CheckUpdate,
@@ -220,8 +220,8 @@ mod tests {
         );
         assert_eq!(parse_ipc("set start_page bogus"), None);
         assert_eq!(
-            parse_ipc("set restore_tabs off"),
-            Some(Command::SetRestoreTabs(false))
+            parse_ipc("set reopen_tabs off"),
+            Some(Command::SetReopenTabs(false))
         );
         assert_eq!(parse_ipc("close"), Some(Command::Close));
         assert_eq!(parse_ipc("quit"), Some(Command::Quit));

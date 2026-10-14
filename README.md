@@ -59,8 +59,7 @@ role on the signing account.
 cargo run -- example.com
 ```
 
-With no argument, zeteme reopens your last session, or DuckDuckGo the first
-time. Video fullscreen fills the screen; `Esc` leaves it.
+With no argument, zeteme opens its start page (see below). Video fullscreen fills the screen; `Esc` leaves it.
 
 ## Keys
 
@@ -100,11 +99,10 @@ Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
 ## Start page
 
-When zeteme starts it reopens the tabs from last time. With none to reopen,
-and in a new tab (`O` then `Enter`, or `:tabopen`), it shows its start page:
-a search box and the main keys. In `:settings` the start page can be
-DuckDuckGo or a blank page instead, and reopening tabs can be turned off so
-zeteme always starts on it.
+zeteme starts on its start page, a search box and the main keys, and new
+tabs (`O` then `Enter`, or `:tabopen`) open it too. In `:settings` the start
+page can be DuckDuckGo or a blank page instead, and zeteme can reopen the
+tabs from last time when it starts. After an update it always reopens them.
 
 ## Tabs
 
@@ -163,5 +161,4 @@ removes them.
 ## Data
 
 Cookies, logins, settings, extensions, the open tabs and the window's size
-and place are kept in `%LOCALAPPDATA%\zeteme`, so zeteme reopens where you
-left off. Downloads go to your Downloads folder.
+and place are kept in `%LOCALAPPDATA%\zeteme`. Downloads go to your Downloads folder.
