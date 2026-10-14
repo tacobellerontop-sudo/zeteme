@@ -167,6 +167,40 @@ impl History {
             .collect()
     }
 
+    /// Every page visited, most visited lately first (counting recent
+    /// visits more, like Firefox's "frecency"), with its latest title; at
+    /// most `limit` of them.
+    pub fn ranked(&self, limit: usize) -> Vec<(&str, &str)> {
+        let now = now();
+        let mut pages: std::collections::HashMap<&str, (u64, &str)> =
+            std::collections::HashMap::new();
+        for visit in &self.visits {
+            let days = now.saturating_sub(visit.time) / 86_400;
+            let weight = match days {
+                0..4 => 100,
+                4..14 => 70,
+                14..31 => 50,
+                31..90 => 30,
+                _ => 10,
+            };
+            let page = pages.entry(visit.url.as_str()).or_insert((0, ""));
+            page.0 += weight;
+            if !visit.title.is_empty() {
+                page.1 = visit.title.as_str();
+            }
+        }
+        let mut ranked: Vec<(&str, u64, &str)> = pages
+            .into_iter()
+            .map(|(url, (score, title))| (url, score, title))
+            .collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(url, _, title)| (url, title))
+            .collect()
+    }
+
     pub fn remove(&mut self, time: u64, url: &str) {
         let before = self.visits.len();
         self.visits.retain(|v| !(v.time == time && v.url == url));
@@ -222,7 +256,14 @@ mod tests {
         assert_eq!(loaded.search("").len(), 2);
         assert_eq!(loaded.search("")[0].url, "https://example.com/");
 
+        history.add("https://example.com/", "");
+        let ranked = history.ranked(10);
+        assert_eq!(ranked[0], ("https://example.com/", "Example"));
+        assert_eq!(ranked[1].0, "https://rust-lang.org/");
+        assert_eq!(history.ranked(1).len(), 1);
+
         history.remove(time, "https://rust-lang.org/");
+        // Both visits to example.com were in the same second: one visit.
         assert_eq!(History::load(&file).visits.len(), 1);
         history.clear();
         assert!(History::load(&file).visits.is_empty());

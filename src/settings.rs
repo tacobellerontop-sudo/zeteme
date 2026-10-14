@@ -24,11 +24,15 @@ pub const START_URL: &str = "http://zeteme.start/";
 #[cfg(not(windows))]
 pub const START_URL: &str = "zeteme://start/";
 
-/// zeteme's history and downloads pages.
+/// zeteme's history, bookmarks and downloads pages.
 #[cfg(windows)]
 pub const HISTORY_URL: &str = "http://zeteme.history/";
 #[cfg(not(windows))]
 pub const HISTORY_URL: &str = "zeteme://history/";
+#[cfg(windows)]
+pub const BOOKMARKS_URL: &str = "http://zeteme.bookmarks/";
+#[cfg(not(windows))]
+pub const BOOKMARKS_URL: &str = "zeteme://bookmarks/";
 #[cfg(windows)]
 pub const DOWNLOADS_URL: &str = "http://zeteme.downloads/";
 #[cfg(not(windows))]
@@ -37,7 +41,7 @@ pub const DOWNLOADS_URL: &str = "zeteme://downloads/";
 /// Whether `url` is one of zeteme's own pages that may change settings and
 /// see the history and downloads. The start page isn't: it needs neither.
 pub fn is_internal(url: &str) -> bool {
-    [SETTINGS_URL, HISTORY_URL, DOWNLOADS_URL]
+    [SETTINGS_URL, HISTORY_URL, BOOKMARKS_URL, DOWNLOADS_URL]
         .iter()
         .any(|page| url.starts_with(page))
 }
@@ -298,6 +302,7 @@ mod tests {
     fn knows_its_own_pages() {
         assert!(is_internal(SETTINGS_URL));
         assert!(is_internal(&format!("{HISTORY_URL}?q=x")));
+        assert!(is_internal(BOOKMARKS_URL));
         assert!(!is_internal(START_URL));
         assert!(!is_internal("http://zeteme.history.example.com/"));
         assert!(!is_internal("https://example.com/"));

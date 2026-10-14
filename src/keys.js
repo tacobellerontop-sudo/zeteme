@@ -123,6 +123,7 @@
         send({ lock: "bitwarden lock", fill: "bitwarden" }[arg] || "bitwarden vault"); break;
       case "ext": case "extension": send(`ext ${arg}`); break;
       case "history": send("history"); break;
+      case "bookmarks": send("bookmarks"); break;
       case "dl": case "downloads": send("downloads"); break;
       case "back": history.back(); break;
       case "forward": history.forward(); break;
@@ -245,7 +246,10 @@
     gT: () => send("tab-prev"),
     f: () => showHints(false),
     F: () => showHints(true),
-    O: () => openBar(":", "tabopen "),
+    // The address bar is a view of zeteme's own, so pages can't read the
+    // history and bookmarks it suggests from.
+    O: () => send("open-bar tab"),
+    M: () => send("bookmark"),
     "C-d": () => scroll(0, half()),
     "C-u": () => scroll(0, -half()),
     // The usual browser shortcuts; they work in text fields too.
@@ -258,7 +262,7 @@
     "C-S-Tab": () => send("tab-prev"),
     "C-PageDown": () => send("tab-next"),
     "C-PageUp": () => send("tab-prev"),
-    "C-l": () => openBar(":", `open ${location.href}`),
+    "C-l": () => send("open-bar edit"),
     "C-f": () => openBar("/"),
     "C-r": () => location.reload(),
     F5: () => location.reload(),
@@ -279,8 +283,8 @@
     H: () => history.back(),
     L: () => history.forward(),
     r: () => location.reload(),
-    o: () => openBar(":", "open "),
-    go: () => openBar(":", `open ${location.href}`),
+    o: () => send("open-bar"),
+    go: () => send("open-bar edit"),
     ":": () => openBar(":"),
     "/": () => openBar("/"),
     n: () => search(lastSearch, false),

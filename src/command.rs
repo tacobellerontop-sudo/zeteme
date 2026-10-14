@@ -54,6 +54,15 @@ pub enum Command {
     HistoryClear,
     SetHistory(bool),
     SetButtons(Vec<Button>),
+    /// Opens the address bar, which suggests pages from the bookmarks and
+    /// history.
+    OpenBar(OpenMode),
+    /// Bookmarks the current page, or removes its bookmark.
+    Bookmark,
+    /// Opens the bookmarks page.
+    Bookmarks,
+    BookmarksReady,
+    BookmarkDelete(String),
     /// Opens the downloads page.
     Downloads,
     DownloadsReady,
@@ -62,6 +71,17 @@ pub enum Command {
     /// Opens the Downloads folder.
     DownloadsFolder,
     Quit,
+}
+
+/// Where the address bar opens what is typed, and what it starts with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OpenMode {
+    /// This tab, starting empty (`o`).
+    Here,
+    /// A new tab (`O`).
+    NewTab,
+    /// This tab, starting with its address (`go`, Ctrl-L).
+    Edit,
 }
 
 /// What the downloads page can do to one download.
@@ -114,6 +134,8 @@ impl Command {
                 | Command::HistoryClear
                 | Command::SetHistory(_)
                 | Command::SetButtons(_)
+                | Command::BookmarksReady
+                | Command::BookmarkDelete(_)
                 | Command::DownloadsReady
                 | Command::Download(..)
                 | Command::DownloadsClear
@@ -180,6 +202,15 @@ pub fn parse_ipc(msg: &str) -> Option<Command> {
             Command::HistoryDelete(time.parse().ok()?, url.to_string())
         }
         "history-clear" => Command::HistoryClear,
+        "open-bar" => Command::OpenBar(match arg {
+            "tab" => OpenMode::NewTab,
+            "edit" => OpenMode::Edit,
+            _ => OpenMode::Here,
+        }),
+        "bookmark" => Command::Bookmark,
+        "bookmarks" => Command::Bookmarks,
+        "bookmarks-ready" => Command::BookmarksReady,
+        "bookmark-delete" if !arg.is_empty() => Command::BookmarkDelete(arg.to_string()),
         "downloads" => Command::Downloads,
         "downloads-ready" => Command::DownloadsReady,
         "downloads-clear" => Command::DownloadsClear,
@@ -374,6 +405,26 @@ mod tests {
             parse_ipc("set history off"),
             Some(Command::SetHistory(false))
         );
+        assert_eq!(
+            parse_ipc("open-bar"),
+            Some(Command::OpenBar(OpenMode::Here))
+        );
+        assert_eq!(
+            parse_ipc("open-bar tab"),
+            Some(Command::OpenBar(OpenMode::NewTab))
+        );
+        assert!(!parse_ipc("open-bar edit").unwrap().internal_only());
+        assert!(!parse_ipc("bookmark").unwrap().internal_only());
+        assert_eq!(
+            parse_ipc("bookmark-delete https://a.com/"),
+            Some(Command::BookmarkDelete("https://a.com/".into()))
+        );
+        assert!(
+            parse_ipc("bookmark-delete https://a.com/")
+                .unwrap()
+                .internal_only()
+        );
+        assert_eq!(parse_ipc("bookmark-delete "), None);
         assert_eq!(parse_ipc("downloads"), Some(Command::Downloads));
         assert!(!Command::Downloads.internal_only());
         assert_eq!(

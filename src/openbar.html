@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e1e; }
+  body { display: flex; flex-direction: column; justify-content: flex-end; box-sizing: border-box;
+         border-top: 1px solid #444; font: 13px/20px Consolas, monospace; color: #ddd; }
+  ul { margin: 0; padding: 0; list-style: none; overflow: hidden; }
+  li { display: flex; gap: 12px; padding: 0 6px; cursor: default; white-space: nowrap; }
+  li.sel { background: #3a3a3a; color: #fff; }
+  li:hover:not(.sel) { background: #262626; }
+  .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #8ab; }
+  .star { width: 1ch; color: #fc3; }
+  .bar { display: flex; padding: 1px 6px; border-top: 1px solid #333; }
+  .bar span { white-space: pre; }
+  input { all: unset; flex: 1; color: #fff; }
+  .hint { color: #777; }
+</style>
+</head>
+<body>
+<ul id="list"></ul>
+<div class="bar"><span id="prefix"></span><input id="text" spellcheck="false">
+  <span class="hint">Tab/↑↓ pick · Enter open · Esc close</span></div>
+<script>
+  // zeteme's address bar, in a webview of its own so pages can't read the
+  // history and bookmarks it suggests from.
+  // DATA: { mode: "open" | "tabopen", text, items: [[url, title, bookmarked]] },
+  // bookmarks first, then pages by how much they were visited lately.
+  const DATA = {{data}};
+  const ROWS = 10;
+  const send = (msg) => window.ipc.postMessage(msg);
+  const $ = (id) => document.getElementById(id);
+  let shown = [];
+  let sel = -1;
+
+  $("prefix").textContent = `:${DATA.mode} `;
+  $("text").value = DATA.text;
+
+  function go(text) {
+    if (text.trim()) send(`go-${DATA.mode} ${text.trim()}`);
+    else send("cancel");
+  }
+
+  function render() {
+    const words = $("text").value.toLowerCase().split(/\s+/).filter(Boolean);
+    // Editing the current address (go) lists everything until you type.
+    const all = $("text").value === DATA.text && DATA.text !== "";
+    shown = DATA.items.filter(([url, title]) => {
+      if (all) return true;
+      const text = `${url} ${title}`.toLowerCase();
+      return words.every((w) => text.includes(w));
+    }).slice(0, ROWS);
+    sel = Math.min(sel, shown.length - 1);
+    $("list").replaceChildren(...shown.map(([url, title, bookmarked], n) => {
+      const li = document.createElement("li");
+      if (n === sel) li.className = "sel";
+      const cell = (cls, text) => {
+        const span = document.createElement("span");
+        span.className = cls;
+        span.textContent = text;
+        li.append(span);
+      };
+      cell("star", bookmarked ? "★" : "");
+      cell("title", title || url);
+      cell("url", url);
+      li.addEventListener("mousedown", (e) => { e.preventDefault(); go(url); });
+      return li;
+    }));
+  }
+
+  addEventListener("keydown", (e) => {
+    const next = (e.key === "Tab" && !e.shiftKey) || e.key === "ArrowDown" || (e.ctrlKey && e.key === "n");
+    const prev = (e.key === "Tab" && e.shiftKey) || e.key === "ArrowUp" || (e.ctrlKey && e.key === "p");
+    // As in qutebrowser, Tab walks the list from the best match down, and
+    // past the end back to what was typed.
+    if (e.key === "Escape") send("cancel");
+    else if (e.key === "Enter") go(sel >= 0 ? shown[sel][0] : $("text").value);
+    else if (next) sel = sel + 1 < shown.length ? sel + 1 : -1;
+    else if (prev) sel = sel < 0 ? shown.length - 1 : sel - 1;
+    else return;
+    e.preventDefault();
+    render();
+  });
+  $("text").addEventListener("input", () => { sel = -1; render(); });
+  // Clicking the page closes the bar, as it does qutebrowser's.
+  const opened = Date.now();
+  addEventListener("blur", () => { if (Date.now() - opened > 300) send("cancel"); });
+  addEventListener("focus", () => $("text").focus());
+  render();
+  $("text").focus();
+</script>
+</body>
+</html>

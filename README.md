@@ -80,8 +80,9 @@ fields as well.
 | `H` / `L` | Back / forward |
 | `r` | Reload |
 | `f` / `F` | Link hints: follow / open in new tab |
-| `o` / `O` | Open a URL or search, in this tab / a new tab |
+| `o` / `O` | Open a URL or search, in this tab / a new tab, with suggestions |
 | `go` | Edit the current URL |
+| `M` | Bookmark the page (again to remove the bookmark) |
 | `J` / `K` (or `gt` / `gT`) | Next / previous tab |
 | `d` / `u` | Close tab / reopen closed tab |
 | `+` / `-` / `=` | Zoom in / out / reset |
@@ -102,7 +103,7 @@ fields as well.
 
 Commands: `:open <url or search>` (`:o`), `:tabopen` (`:t`; on its own it opens the start page), `:close`,
 `:back`, `:forward`, `:reload` (`:r`), `:settings` (`:set`), `:ext <name>`,
-`:bw` / `:bw fill` / `:bw lock`, `:history`, `:downloads` (`:dl`), `:quit` (`:q`).
+`:bw` / `:bw fill` / `:bw lock`, `:history`, `:bookmarks`, `:downloads` (`:dl`), `:quit` (`:q`).
 
 Anything typed into `:open` that isn't a URL is searched on DuckDuckGo.
 
@@ -126,6 +127,19 @@ bottom of a bar at the side) in `:settings`: Downloads, History, New tab,
 Bitwarden vault and Settings. Downloads is pinned to start with; it turns
 green and fills up while files download, and stays green until you look at
 `:downloads`.
+
+## Address bar and bookmarks
+
+`o`, `O`, `go` and `Ctrl-L` open the address bar along the bottom of the
+window. As you type, it suggests your bookmarks and the pages you visit most
+(every word you type must appear in the address or title): `Tab` and the
+arrow keys pick one, `Enter` opens it, or what you typed if none is picked.
+The bar is a view of zeteme's own, so web pages can't read your history or
+bookmarks through it.
+
+`M` bookmarks the page you are on, and pressing it again removes the
+bookmark. `:bookmarks` lists them, with a search box and a button to remove
+each one, and the Bookmarks button can be pinned to the tab bar.
 
 ## History
 
